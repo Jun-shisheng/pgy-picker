@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -116,6 +117,8 @@ def _resolve_login(page, account: str, password: str) -> str:
             break
         page.wait_for_timeout(2_000)
         status = pgy_login.login_status(page)
+    # 顺手记下来：这样别处查状态就不必再走一次浏览器（那会被检索堵住）。
+    _remember_login_state(status)
 
     if status == 200:
         log.info("已是登录态")
@@ -297,11 +300,43 @@ def login_now(role: str = DEFAULT_ROLE) -> dict:
         return pgy_session.run_with_page(_login_only_inner, account, password, role)
 
 
-def login_status() -> int:
-    try:
-        return pgy_session.login_status()
-    except Exception:
-        return 0
+_login_state: int = 0
+_login_state_at: float = 0.0
+
+
+def _remember_login_state(status: int) -> None:
+    """记下**真问到的**登录态（0 = 没问着，不覆盖已知值）。"""
+    global _login_state, _login_state_at
+    if status:
+        _login_state = status
+        _login_state_at = time.time()
+
+
+def login_status(*, probe: bool = True) -> int:
+    """当前登录态：200=已登录 / 401=未登录 / 0=还不确定。
+
+    ⚠️ **真去问必须走单工作线程**（`pgy_session.login_status()` → `submit`），
+    而一次检索会把它占住几分钟。于是「查一下状态」这种本该瞬时返回的请求被拖到
+    客户端超时 —— 界面上就冒出一句与真因毫不相干的报错
+    （实测踩到：检索明明 200 成功返回，界面却报「响应超时」）。
+
+    所以：**有长操作在跑时不真问**，直接给最近一次问到的值；平时才真问。
+    界面上要据此如实标注这个值是什么时候问的（`login_checked_age_s`）。
+    """
+    if probe and not is_busy():
+        try:
+            _remember_login_state(pgy_session.login_status())
+        except Exception:
+            # 问不到就保留上一次的值 —— 不能把一个已知状态清成"未登录"。
+            log.warning("查询登录态失败，沿用上一次的结果", exc_info=True)
+    return _login_state
+
+
+def login_checked_age_s() -> float | None:
+    """上次真问到登录态是多久以前；从没问到过返回 None。"""
+    if not _login_state_at:
+        return None
+    return round(time.time() - _login_state_at, 1)
 
 
 def industries() -> list[dict]:

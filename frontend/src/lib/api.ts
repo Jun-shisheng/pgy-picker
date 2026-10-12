@@ -30,6 +30,8 @@ export interface SelectionStatus {
   login_status: number;
   logged_in: boolean;
   role: string;
+  /** 上次真问到登录态是多久以前（秒）；null = 还没问到过。 */
+  login_checked_age_s: number | null;
   /** 报价档位配没配。**没配 = 预算把关关着**，交付表会混进超预算的达人。 */
   pricing_configured: boolean;
   pricing_multiplier: number | null;
@@ -147,8 +149,14 @@ export interface LogPayload {
   matched?: number;
 }
 
-/** 统一的请求封装：把后端的错误信封翻成一句可直接显示的中文。 */
-async function request<T>(path: string, init?: RequestInit, timeoutMs = 30_000): Promise<T> {
+/** 统一的请求封装：把后端的错误信封翻成一句可直接显示的中文。
+ *
+ * ⚠️ **超时文案必须各自给**：原来所有请求共用一句「选号耗时较长…」，
+ * 于是读进度、读状态超时都会说成"选号超时" —— 用户按着这句话去调条数，
+ * 真因却在别处（实测踩到：检索明明 200 成功返回，界面却报超时）。
+ */
+async function request<T>(path: string, init?: RequestInit, timeoutMs = 30_000,
+                          timeoutMessage = "本地服务响应超时。"): Promise<T> {
   const controller = new AbortController();
   // 选号要真的去平台翻页，可能几十秒到几分钟；默认给足余量。
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -178,7 +186,7 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 30_000):
     return (raw ? JSON.parse(raw) : {}) as T;
   } catch (error) {
     if ((error as Error)?.name === "AbortError") {
-      throw new Error("本地服务响应超时。选号耗时较长，请稍后重试或减少条数。");
+      throw new Error(timeoutMessage);
     }
     throw error;
   } finally {
@@ -190,17 +198,23 @@ export const api = {
   health: () => request<HealthResponse>("/api/health"),
   session: () => request<SessionResponse>("/api/session"),
 
-  selectionStatus: () => request<SelectionStatus>("/api/selection/status"),
+  selectionStatus: () =>
+    request<SelectionStatus>("/api/selection/status", undefined, 30_000,
+      "读取状态超时 —— 本地服务可能正在忙着检索，等它跑完再看。"),
   /** 选号进度。轮询用，超时给短一点：它只该是个瞬时快照。 */
   selectionProgress: () =>
-    request<SelectionProgress>("/api/selection/progress", undefined, 8_000),
+    request<SelectionProgress>("/api/selection/progress", undefined, 8_000,
+      "读取进度超时。"),
   selectionIndustries: () =>
-    request<IndustriesResponse>("/api/selection/industries", undefined, 120_000),
+    request<IndustriesResponse>("/api/selection/industries", undefined, 120_000,
+      "读取行业清单超时 —— 本地服务可能正在忙着检索，等它跑完再试。"),
   selectionRun: (body: SelectionRunRequest) =>
     request<SelectionRunResponse>(
       "/api/selection/run",
       { method: "POST", body: JSON.stringify(body) },
       10 * 60_000, // 10 分钟：真的会翻很多页
+      "选号响应超时。可能是平台很慢或翻页过多 —— 可以稍后重试，"
+      + "或把「每个量级取多少条」调小。",
     ),
 
   /** 导出文件的下载地址（供浏览器直接打开）。 */
@@ -245,5 +259,6 @@ export const api = {
     request<{ ok: boolean; deleted: boolean }>("/api/account", { method: "DELETE" }),
   /** 触发登录：在屏幕上那个可见的浏览器窗口里跑，要人过验证码，可能很久。 */
   loginNow: () => request<{ connected: boolean; already: boolean }>(
-    "/api/account/login", { method: "POST" }, 10 * 60_000),
+    "/api/account/login", { method: "POST" }, 10 * 60_000,
+    "登录等待超时。如果浏览器窗口里还需要你点验证码，请完成后再试一次。"),
 };

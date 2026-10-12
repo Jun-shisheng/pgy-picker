@@ -240,6 +240,9 @@ def create_app() -> FastAPI:
             "has_credentials": credential_service.has_credentials(),
             "login_status": status,
             "logged_in": status == 200,
+            # 检索跑着的时候上面那个值可能是几分钟前问的（服务不会再往浏览器里挤），
+            # 如实给出来，界面才好说清"这是什么时候查的"。
+            "login_checked_age_s": selection_service.login_checked_age_s(),
             "role": selection_service.DEFAULT_ROLE,
             "pricing_configured": pricing_config is not None,
             "pricing_multiplier": pricing_config.multiplier if pricing_config else None,

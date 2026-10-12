@@ -44,6 +44,18 @@ function cellText(value: BloggerRow[string]): string {
   return value === null || value === undefined ? "" : String(value);
 }
 
+/** 登录态是多久以前查的。刚查过就不打扰；久了就如实标一句。 */
+function staleLoginNote(ageSeconds: number | null | undefined) {
+  if (ageSeconds === null || ageSeconds === undefined) return null;   // 还没查到过
+  if (ageSeconds < 60) return null;
+  const minutes = Math.floor(ageSeconds / 60);
+  return (
+    <span className="text-[11px] text-text-tertiary">
+      （{minutes >= 60 ? `${Math.floor(minutes / 60)} 小时` : `${minutes} 分钟`}前查的）
+    </span>
+  );
+}
+
 export function SelectionPage() {
   const [status, setStatus] = useState<SelectionStatus | null>(null);
   const [industries, setIndustries] = useState<IndustryNode[]>([]);
@@ -184,6 +196,9 @@ export function SelectionPage() {
                   : "flex items-center gap-1.5 text-text-secondary"}>
                   {status.logged_in ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
                   平台登录：{status.logged_in ? "已登录" : "未登录"}
+                  {/* 检索跑着的时候服务不会再往浏览器里挤，所以这个值可能是旧快照 ——
+                      如实标出来，免得用户拿一个几分钟前的状态做判断。 */}
+                  {staleLoginNote(status.login_checked_age_s)}
                 </span>
                 <span className={status.pricing_configured
                   ? "flex items-center gap-1.5 text-success"
@@ -195,7 +210,15 @@ export function SelectionPage() {
                 </span>
               </>
             )}
-            <Button variant="secondary" className="h-8 px-3 text-xs" onClick={() => void refreshStatus()}>
+            {/* 检索期间禁用：查状态要走浏览器，而浏览器正被检索占着，
+                点了只会堵到超时、弹一句看不懂的错（这就是那个 bug 的来源之一）。 */}
+            <Button
+              variant="secondary"
+              className="h-8 px-3 text-xs"
+              onClick={() => void refreshStatus()}
+              disabled={running}
+              title={running ? "检索进行中，完成后会自动刷新状态" : undefined}
+            >
               <RefreshCw className="h-3.5 w-3.5" /> 刷新
             </Button>
             {status && !status.has_credentials && (

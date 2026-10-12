@@ -179,6 +179,95 @@ def ensure_ready(role: str = DEFAULT_ROLE) -> None:
     pgy_session.run_with_page(_ensure_ready_inner, account, password, role)
 
 
+def _industry_flat(industries: list[dict]) -> list[dict]:
+    """行业树 → 扁平候选列表（一级与二级都算候选，二级带上它的一级）。"""
+    flat: list[dict] = []
+    for first in industries:
+        flat.append({"label": str(first.get("label") or ""), "value": str(first.get("value") or ""),
+                     "first": str(first.get("value") or ""), "second": ""})
+        for second in first.get("children") or []:
+            flat.append({"label": str(second.get("label") or ""),
+                         "value": str(second.get("value") or ""),
+                         "first": str(first.get("value") or ""),
+                         "second": str(second.get("value") or "")})
+    return [item for item in flat if item["label"] and item["value"]]
+
+
+def _common_chars(a: str, b: str) -> str:
+    """两个词之间最长的连续公共子串（只在 ≥2 个字时才算"像"）。"""
+    best = ""
+    for i in range(len(a)):
+        for j in range(i + 2, len(a) + 1):
+            piece = a[i:j]
+            if piece in b and len(piece) > len(best):
+                best = piece
+    return best
+
+
+def classify_terms(terms: list[str]) -> tuple[list[dict], str]:
+    """把用户随手输入的一串词分成「行业」与「关键词」。返回 `(结果, 行业清单来源)`。
+
+    ⚠️ **这是"猜"，所以结果必须摆给用户看**（用户 2026-10-12 定的做法）：
+    猜错了不能静默——静默就是给出一份错的名单而使用者不知道。
+
+    **规则（从强到弱，命中即止）**：
+
+    | 档 | 判据 | 例子 |
+    |---|---|---|
+    | `exact` | 去空格后与行业 label **完全相同** | 「母婴」→ 母婴 |
+    | `contains` | label 与词**互相包含**（长度 ≥ 2） | 「母婴用品」→ 母婴 |
+    | `overlap` | 有 **≥ 2 个连续相同汉字** | 「亲子达人」→「亲子家庭」（共有「亲子」） |
+    | `none` | 都不中 | → 当**关键词** |
+
+    `overlap` 是**启发式**，多候选时把它们全返回（`candidates`），
+    界面据此提示"这个词像谁不确定"，由人来定。
+    """
+    industries, source = industries_cached()
+    flat = _industry_flat(industries)
+    results: list[dict] = []
+
+    for raw in terms:
+        term = str(raw or "").strip()
+        if not term:
+            continue
+        key = term.replace(" ", "").lower()
+
+        def normalize(text: str) -> str:
+            return text.replace(" ", "").lower()
+
+        exact = [c for c in flat if normalize(c["label"]) == key]
+        contains = [c for c in flat
+                    if c not in exact
+                    and len(normalize(c["label"])) >= 2
+                    and (normalize(c["label"]) in key or key in normalize(c["label"]))]
+        overlap = []
+        if exact or contains:
+            overlap = []
+        else:
+            for candidate in flat:
+                piece = _common_chars(key, normalize(candidate["label"]))
+                if len(piece) >= 2:
+                    overlap.append({**candidate, "_piece": piece})
+            overlap.sort(key=lambda c: -len(c["_piece"]))
+
+        if exact:
+            best, match, pool = exact[0], "exact", exact
+        elif contains:
+            best, match, pool = contains[0], "contains", contains
+        elif overlap:
+            best = {k: v for k, v in overlap[0].items() if k != "_piece"}
+            match, pool = "overlap", [{k: v for k, v in c.items() if k != "_piece"} for c in overlap]
+        else:
+            results.append({"term": term, "kind": "keyword", "match": "none",
+                            "matched": None, "candidates": []})
+            continue
+
+        results.append({"term": term, "kind": "industry", "match": match,
+                        "matched": best, "candidates": pool[:5]})
+
+    return results, source
+
+
 def _report_page(page_num: int, collected: int, total: int, counts: dict) -> None:
     """每翻完一页就把进度报出去（`search_all` 的 `on_page` 钩子）。"""
     progress.update(page=page_num, collected=collected, total=total,
@@ -331,8 +420,58 @@ def search_batch(params: SearchParams, *, per_tier: int = 20, mode: str = "fresh
     return rows, stats
 
 
+def apply_terms(params: SearchParams, terms: list[str] | None) -> tuple[SearchParams, list[str], list[dict]]:
+    """把用户随手输入的一串词分派到「行业」与「关键词」。返回 `(参数, 关键词表, 判断明细)`。
+
+    **判断是隐性的**（用户 2026-10-12：「这些逻辑都是隐性的，不要暴露出来，
+    我们自己程序有判断」）—— 界面上不弹确认、不摆分类结果。
+
+    但判断明细**必须返回出去并记账**：猜错了要能事后查出来。
+    这是本项目一贯的规矩（`CLAUDE.md` 第九条：每个字段都要能指回出处），
+    也是用户自己要的「设置里能有日志给我们开发检查」。
+
+    冲突处置：**下拉里显式选过行业就听它的** —— 人不该被程序猜的结果覆盖。
+    识别出多个行业时只用第一个，其余降级为关键词（并记一条 warning）。
+    """
+    clean = [str(t).strip() for t in (terms or []) if t and str(t).strip()]
+    if not clean:
+        return params, [], []
+
+    try:
+        items, _source = classify_terms(clean)
+    except Exception:
+        # 行业清单拿不到（没登录/没缓存）不该让整轮检索失败 —— 退化成"全是关键词"。
+        log.warning("检索词分类失败，一律按关键词处理", exc_info=True)
+        return replace(params, keyword=""), clean, [
+            {"term": t, "kind": "keyword", "match": "failed"} for t in clean]
+
+    industries = [i for i in items if i["kind"] == "industry"]
+
+    if params.first_industry or params.second_industry:
+        # 下拉里选过 → 程序猜的行业词一律降级，只当关键词
+        keywords = [i["term"] for i in items]
+        if industries:
+            log.info("下拉里已选行业，检索词中的 %s 一律按关键词处理",
+                     [i["term"] for i in industries])
+    elif industries:
+        best = industries[0]["matched"]
+        params = replace(params, first_industry=best["first"], second_industry=best["second"])
+        keywords = [i["term"] for i in items if i["kind"] == "keyword"]
+        keywords += [i["term"] for i in industries[1:]]
+        log.info("检索词里识别出行业：%r → %r（%s）%s",
+                 industries[0]["term"], best["label"], industries[0]["match"],
+                 f"；另有 {len(industries) - 1} 个行业词降级为关键词" if len(industries) > 1 else "")
+        if len(industries) > 1:
+            log.warning("识别出多个行业，本次只用第一个：%s",
+                        [i["term"] for i in industries])
+    else:
+        keywords = [i["term"] for i in items]
+
+    return replace(params, keyword=""), keywords, items
+
+
 def run_selection(params: SearchParams, *, per_tier: int = 20, mode: str = "fresh",
-                  keywords: list[str] | None = None) -> dict:
+                  terms: list[str] | None = None) -> dict:
     """跑完整一次选号：登录 → 检索 → 导出。
 
     **这是唯一的实现**：同步接口 `POST /api/selection/run` 与「启动即返回」的
@@ -346,9 +485,11 @@ def run_selection(params: SearchParams, *, per_tier: int = 20, mode: str = "fres
         # 与「账户 → 去登录」共用一把锁：浏览器只有一个工作线程，
         # 同时开两个操作只会互相排队，不如当场告诉用户谁在占着。
         with operation_guard("检索达人"):
-            ensure_ready()
+            ensure_ready()   # 必须先登录：取行业清单要它
+            params, keywords, classified = apply_terms(params, terms)
             rows, stats = search_batch(params, per_tier=per_tier, mode=mode,
                                        keywords=keywords)
+        stats["classified_terms"] = classified
         path = export(rows, params, stats=stats)
     except Exception as exc:
         progress.fail(str(exc))

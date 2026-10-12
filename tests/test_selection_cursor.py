@@ -130,6 +130,32 @@ def test_fresh_mode_ignores_the_cursor(monkeypatch):
     assert seen["start_page"] == 1, "从头取就该从第 1 页开始"
 
 
+# ── 单次翻页上限 ────────────────────────────────────────────────────────────
+
+def test_one_run_is_capped_at_the_page_limit(monkeypatch):
+    """**「一次要等多久」由这个常量决定**，别让它悄悄回到 60。
+
+    回到 60 的后果实测过：6 个量级各 20 条要凑 120 条，而超头部两档整池子都稀少，
+    于是每次都会翻满 60 页（217 秒），用户每次干等三分半、结果里全是"没凑满"。
+    """
+    captured: dict = {}
+
+    def fake_search_all(page, params, **kwargs):
+        captured.update(kwargs)
+        return [], {"pages": 0, "page_limit": 15, "start_page": 1, "next_page": 1,
+                    "total": 0, "per_tier_counts": {}, "collected": 0}
+
+    monkeypatch.setattr(selection_service, "search_all", fake_search_all)
+    # 绕过浏览器工作线程，直接同步执行传进去的那个函数
+    monkeypatch.setattr(selection_service.pgy_session, "run_with_page",
+                        lambda fn, *args, **kwargs: fn(None))
+
+    selection_service.search(SearchParams(), per_tier=20)
+
+    assert selection_service.PAGES_PER_RUN == 15
+    assert captured["max_pages"] == selection_service.PAGES_PER_RUN
+
+
 # ── 接口层 ──────────────────────────────────────────────────────────────────
 
 def test_api_accepts_next_mode(client, monkeypatch):

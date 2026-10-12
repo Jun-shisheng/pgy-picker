@@ -333,12 +333,16 @@ export function SelectionPage() {
             </p>
           )}
 
-          <p className="text-xs text-text-tertiary">
-            每个量级各取这么多条（超头部/头部/腰部/尾部各一份名单），量级高的序号在前。
-            只收录粉丝 1w–50w、曝光与互动中位数都不为 0、且图文或视频任一在预算内的达人；
-            两个报价都超的、以及中位数为 0（没有可参考的数据表现）的都会被剔除。
+          <p className="text-xs leading-relaxed text-text-tertiary">
+            一共 <b>6 个量级</b>，每档各取这么多条，量级高的序号在前：
+            超头部KOL（40w–50w / 30w–40w）、头部KOL（20w–30w / 10w–20w）、
+            腰部KOL（5w–10w）、尾部KOL（1w–5w）。
             <br />
-            高量级本来人就少，凑不满会<b>如实交少并在结果里标出来</b>，不会为了凑数无限翻页。
+            只收录粉丝 1w–50w、曝光与互动中位数都不为 0、且图文或视频任一在预算内的达人；
+            两个报价都超的、以及中位数为 0 的都会被剔除。
+            <br />
+            单次检索最多翻 <b>15 页</b>（约 50 秒）。超头部本来人就少，一次翻不满是常事
+            —— 点<b>「换一批」</b>接着往下取，不够就多点几次，每点一次都是没看过的新人。
           </p>
 
           <ProgressPanel progress={progress.data} startedAtMs={runStartedAt} />
@@ -390,24 +394,24 @@ export function SelectionPage() {
             {/* 说清"这一批是从哪儿取的、下一批从哪儿开始" —— 否则用户会以为
                 每次跑出来都一样是程序坏了（平台排序写死，从头取当然一样）。 */}
             <p className="text-xs text-text-tertiary">
-              本批从第 <b>{result.stats?.start_page ?? 1}</b> 页开始，共翻 {result.stats?.pages ?? "?"} 页。
+              本批从第 <b>{result.stats?.start_page ?? 1}</b> 页开始，共翻 {result.stats?.pages ?? "?"} 页
+              {result.stats?.pages === result.stats?.page_limit && !result.stats?.reached_end
+                ? "（已到单次上限）" : ""}
+              。
               {result.stats?.reached_end
                 ? " 平台这边已经翻到底了，没有更多新人了；「开始检索」会从头再来一遍。"
-                : <> 点<b>「换一批」</b>会从第 {result.stats?.next_page ?? "?"} 页继续往下取。</>}
+                : <> 点<b>「换一批」</b>会从第 {result.stats?.next_page ?? "?"} 页继续往下取没看过的人。</>}
             </p>
 
-            {/* 各量级实际取到几条 —— 高量级本来就少，凑不满要让人看见 */}
+            {/* 各量级实际取到几条。
+                **不再逐档标"没凑满"**：单次只翻 15 页，翻不满是常态而不是异常，
+                全刷成橙色只会变成一堵噪音墙。够不够、要不要继续，交给下面的
+                「换一批」提示统一说。 */}
             {result.stats?.per_tier_counts && (
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-                {Object.entries(result.stats.per_tier_counts).map(([tier, count]) => {
-                  const short = count < (result.stats.per_tier_target ?? 0);
-                  return (
-                    <span key={tier} className={short ? "text-warning" : "text-text-secondary"}>
-                      {tier} <b>{count}</b>
-                      {short ? " 条（没凑满）" : " 条"}
-                    </span>
-                  );
-                })}
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-secondary">
+                {Object.entries(result.stats.per_tier_counts).map(([tier, count]) => (
+                  <span key={tier}>{tier} <b>{count}</b> 条</span>
+                ))}
               </div>
             )}
 

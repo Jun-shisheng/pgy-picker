@@ -238,6 +238,7 @@ def search_all(page, params: SearchParams, *, per_tier: int = 20, key_of=None,
 
     stats = {
         "pages": pages_read,
+        "page_limit": max_pages,     # 界面据此说明"本批是到上限了、还是平台到底了"
         "start_page": first_page,
         "next_page": next_page,
         "reached_end": reached_end,

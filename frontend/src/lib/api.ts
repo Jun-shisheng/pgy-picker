@@ -68,6 +68,8 @@ export interface SelectionRunRequest {
 export interface SelectionStats {
   /** 本次翻了几页。 */
   pages: number;
+  /** 单次翻页上限（用于区分「到上限了」与「平台到底了」）。 */
+  page_limit?: number;
   /** 本批从第几页开始取。 */
   start_page?: number;
   /** 下次该从第几页继续（「换一批」的依据）。 */

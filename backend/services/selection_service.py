@@ -29,6 +29,15 @@ from backend.services.export_service import export_excel
 log = logging.getLogger("pgy.selection")
 
 DEFAULT_ROLE = "代理商"
+#: 单次检索最多翻多少页 —— **这就是「一次要等多久」的旋钮**。
+#:
+#: 每页约 3.5 秒（节流 1.5 秒 + 平台响应），15 页 ≈ 50 秒。
+#: 为什么不是 60：一共 6 个量级档位、每档 20 条，要 120 条才"满足"，
+#: 而超头部两档整池子都稀少（实测只取到 14、15 条）—— 于是 60 页上限**每次都会翻满**
+#: （实测 217 秒），那个「连续 6 页无新增就停」的兜底永远攒不满，
+#: 用户每次都得干等三分半，结果里还全是"没凑满"。
+#: 改成小步多次：一次翻十几页（约 50 秒），不够就点「换一批」接着往下取。
+PAGES_PER_RUN = 15
 KOL_PAGE = "https://pgy.xiaohongshu.com/solar/pre-trade/note/kol"
 EXPORT_DIR = ROOT / "exports"
 
@@ -203,7 +212,7 @@ def search(params: SearchParams, *, per_tier: int = 20,
         lambda page: search_all(
             page, params, per_tier=per_tier, key_of=key_of, tier_keys=labels,
             throttle=throttle.default, keep=keep, on_page=_report_page,
-            start_page=start_page))
+            start_page=start_page, max_pages=PAGES_PER_RUN))
     # 排序规则见 `mapper.sort_rows()`（量级 → 符合度 → 图文报价 → 粉丝数）
     rows = sort_rows(map_page(raw))
     stats["mapped"] = len(rows)

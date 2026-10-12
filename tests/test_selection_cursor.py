@@ -132,17 +132,18 @@ def test_fresh_mode_ignores_the_cursor(monkeypatch):
 
 # ── 单次翻页上限 ────────────────────────────────────────────────────────────
 
-def test_one_run_is_capped_at_the_page_limit(monkeypatch):
-    """**「一次要等多久」由这个常量决定**，别让它悄悄回到 60。
+def test_one_run_carries_the_page_safety_cap(monkeypatch):
+    """目标是「每档凑够 20」，`PAGES_PER_RUN` 只是**安全上限**。
 
-    回到 60 的后果实测过：6 个量级各 20 条要凑 120 条，而超头部两档整池子都稀少，
-    于是每次都会翻满 60 页（217 秒），用户每次干等三分半、结果里全是"没凑满"。
+    别把它调小：调小就等于"凑不完也不翻了"，直接违背用户要的「每个量级必定要有 20 条」。
+    （历史上它一度是 15，那是"单次只等 50 秒"的方案 —— 与"必 20"冲突，已废止。）
     """
     captured: dict = {}
 
     def fake_search_all(page, params, **kwargs):
         captured.update(kwargs)
-        return [], {"pages": 0, "page_limit": 15, "start_page": 1, "next_page": 1,
+        return [], {"pages": 0, "page_limit": selection_service.PAGES_PER_RUN,
+                    "start_page": 1, "next_page": 1,
                     "total": 0, "per_tier_counts": {}, "collected": 0}
 
     monkeypatch.setattr(selection_service, "search_all", fake_search_all)
@@ -152,8 +153,8 @@ def test_one_run_is_capped_at_the_page_limit(monkeypatch):
 
     selection_service.search(SearchParams(), per_tier=20)
 
-    assert selection_service.PAGES_PER_RUN == 15
     assert captured["max_pages"] == selection_service.PAGES_PER_RUN
+    assert selection_service.PAGES_PER_RUN >= 60, "上限太小会让'必 20'变成空话"
 
 
 # ── 接口层 ──────────────────────────────────────────────────────────────────

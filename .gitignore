@@ -1,0 +1,72 @@
+# ── 项目规则：只推代码，不推安装包与本地数据（CLAUDE.md 第八条）──────────────
+
+# 打包产物
+release/
+dist/
+frontend/dist/
+frontend/src-tauri/target/
+frontend/src-tauri/binaries/
+frontend/src-tauri/gen/
+
+# ⚠️ **不忽略整个 build/**：里面有 build-sidecar.ps1 / build-mcp.ps1 /
+# bump-version.ps1 这些必需的构建脚本，是源码的一部分。
+# 只忽略它下面真正的构建中间产物：
+build/pyinstaller/
+build/pyinstaller-mcp/
+build/smoke/
+build/dist-*/
+build/_stage*/
+build/sidecar-prev-*.exe
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# 本地运行数据（绝不入库）
+*.db
+*.db-journal
+*.sqlite
+*.log
+pgy_logs/
+profiles/
+asset-cache/
+snapshots/
+browser-endpoints/
+uids.txt
+
+# 交付物：开发态的默认导出目录就是项目根的 exports/（装机后是安装目录下的 exports/）。
+# 里面是客户名单与实际报价，绝不入库。
+exports/
+
+# 应用设置（本机偏好：导出目录等）
+settings.json
+
+# 行业枚举本地快照（可再生：下次活取会覆盖；落在仓库根，别提交进去）
+industries-cache.json
+
+# 「换一批」的翻页游标
+selection-cursor.json
+# 报价配置：商业敏感，绝不入库（真实价格由使用者自行放置，
+# 仓库里只有 backend/providers/pugongying/pricing.example.json 这个无真实价格的样板）
+pricing.json
+
+# 探针证据（含平台原始响应与截图，仅本机留存）
+docs/evidence/
+
+# 客户材料与公司报价（商业敏感，绝不入库）
+资料和说明/
+
+# 凭据与配置
+.env
+.env.*
+*.local.json
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

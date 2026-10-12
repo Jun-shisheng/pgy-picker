@@ -1,0 +1,85 @@
+"""把达人行渲染成交付给客户的 Excel。
+
+**只有一张表，严格对齐客户提报表头**（`资料和说明/横店影视中秋国庆达人提报表头.xlsx`）：
+11 列、一人一行、不额外加列、**不带任何元信息**。
+
+「元信息」（采集时间 / 筛选条件 / 来源接口 / 检索统计）曾经放在第二张表里，
+**2026-10-12 按用户要求去掉了**：交付物就是达人名单，别的东西混进去只会让人追问
+「这行是什么」——它们属于运行日志，去「设置 → 运行日志」看。
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Iterable
+
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+
+from backend.providers.pugongying.fields import COLUMNS
+from backend.providers.pugongying.mapper import FLAGS_KEY, NO_PRICE_TEXT, OVER_BUDGET_KEY
+
+# 列宽（按客户表头实际观感给，够看即可）
+#
+# 「量级」要装下 `超头部KOL(40w-50w)`：中文按 2 个单位算，
+# 3 个中文字(6) + `KOL`(3) + `(40w-50w)`(9) = 18，留点余量给 20。
+# 窄了会被右边的「序号」挡住（用户 2026-10-12 反馈）。
+_COLUMN_WIDTH = {
+    "量级": 20, "序号": 7, "昵称": 22, "粉丝量": 12, "主页链接": 42,
+    "IP": 18, "类型": 16, "曝光中位数": 14, "互动中位数": 14, "图文": 12, "视频": 12,
+}
+_HEADER_FILL = PatternFill("solid", fgColor="F0F0F0")
+# 报价超出该档位上限的单元格底色（浅琥珀）。**只标单元格，不加列、不改结构** ——
+# 客户表头是 11 列，不能因为要标记就多一列出来。
+_OVER_BUDGET_FILL = PatternFill("solid", fgColor="FFE9A8")
+_OVER_BUDGET_FONT = Font(bold=True, color="9C5700")
+# 「未有此报价」用灰斜体，让人一眼看出这不是一个价格数字。
+_NO_PRICE_FONT = Font(italic=True, color="A0A5B1")
+
+
+def _write_header(ws) -> None:
+    for index, name in enumerate(COLUMNS, start=1):
+        cell = ws.cell(row=1, column=index, value=name)
+        cell.font = Font(bold=True)
+        cell.fill = _HEADER_FILL
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[get_column_letter(index)].width = _COLUMN_WIDTH.get(name, 14)
+
+
+def export_excel(rows: Iterable[dict], path: str | Path) -> Path:
+    """写出 Excel：**只有客户表头那一张表**。
+
+    Args:
+        rows: `mapper.map_page()` 的产物（键为 `COLUMNS` 里的列名）。
+        path: 输出路径（.xlsx）。
+    """
+    rows = list(rows)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "达人提报"
+    _write_header(ws)
+
+    for row_index, row in enumerate(rows, start=2):
+        flags = row.get(FLAGS_KEY) or {}
+        over = set(flags.get(OVER_BUDGET_KEY) or ())   # 如 {"图文"}
+        for column_index, name in enumerate(COLUMNS, start=1):
+            cell = ws.cell(row=row_index, column=column_index, value=row.get(name))
+            # 只有真正的数字才右对齐 —— 「未有此报价」是文本，右对齐会显得像数值。
+            if isinstance(cell.value, (int, float)):
+                cell.alignment = Alignment(horizontal="right")
+            elif cell.value == NO_PRICE_TEXT:
+                # 让「未有此报价」一眼看着就不是数字（灰斜体）
+                cell.font = _NO_PRICE_FONT
+            # 这一项超了预算上限 → 给这个单元格上色（"一个超一个没超"要能一眼看出来）
+            if name in over:
+                cell.fill = _OVER_BUDGET_FILL
+                cell.font = _OVER_BUDGET_FONT
+
+    ws.freeze_panes = "A2"
+
+    wb.save(path)
+    return path

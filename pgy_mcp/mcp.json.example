@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "ling": {
+      "type": "stdio",
+      "command": "C:\\Users\\<用户名>\\AppData\\Local\\LingMCP\\ling-mcp.exe",
+      "args": []
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "_说明": "报价档位配置的**格式样板**（不含真实价格）。真实配置放 <数据目录>/pricing.json 或 资料和说明/报价档位.json，两者都不入库。",
+  "_规则": "平台报价上限 = 对应档位的 image/video 基准价 × multiplier；超出上限的达人不进名单。",
+  "multiplier": 1.3,
+  "tiers": [
+    { "label": "超头部KOL", "bracket": "40w-50w", "min": 400000, "max": 500000, "image": 0, "video": 0 },
+    { "label": "超头部KOL", "bracket": "30w-40w", "min": 300000, "max": 400000, "image": 0, "video": 0 },
+    { "label": "头部KOL",   "bracket": "20w-30w", "min": 200000, "max": 300000, "image": 0, "video": 0 },
+    { "label": "头部KOL",   "bracket": "10w-20w", "min": 100000, "max": 200000, "image": 0, "video": 0 },
+    { "label": "腰部KOL",   "bracket": "5w-10w",  "min":  50000, "max": 100000, "image": 0, "video": 0 },
+    { "label": "尾部KOL",   "bracket": "1w-5w",   "min":  10000, "max":  50000, "image": 0, "video": 0 }
+  ]
+}

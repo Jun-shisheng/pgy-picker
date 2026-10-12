@@ -1,0 +1,5 @@
+# Windows 批处理必须用 CRLF 换行：LF-only 的 .bat/.cmd 会让 cmd 在
+# 解析时错位（for 循环、if 块、含中文的行全部被拆散），报一堆
+# 「不是内部或外部命令」。入库强制 CRLF，checkout 也还原成 CRLF。
+*.bat text eol=crlf
+*.cmd text eol=crlf

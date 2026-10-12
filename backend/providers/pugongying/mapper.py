@@ -167,6 +167,18 @@ def map_page(items: list[dict], *, start_index: int = 1) -> list[dict]:
     return rows
 
 
+def median_of(item: dict, column: str) -> int | None:
+    """按 `FIELD_MAP` 取原始达人字典里某一列的数值（如「曝光中位数」）。
+
+    **故意复用 `FIELD_MAP`**：原始字段名（`accumCoopImpMedinNum30d` 之类）
+    只写在映射表那一处。把关逻辑里再抄一遍的话，平台改字段时必然漏改一处。
+    """
+    spec = FIELD_MAP.get(column)
+    if spec is None:
+        return None
+    return _apply(spec["transform"], [item.get(f) for f in spec["fields"]])
+
+
 def build_gate() -> tuple[Callable[[dict], bool], dict]:
     """构造**统一的「达人有资格进名单吗」判定**。返回 `(keep, stats)`。
 
@@ -178,19 +190,37 @@ def build_gate() -> tuple[Callable[[dict], bool], dict]:
     `keep` 作用在**原始达人字典**上（不是映射后的行），因为翻页时要边取边判，
     剔掉的人不计入 `want`，否则只能交出一份短名单。
 
-    两道关：
+    三道关：
     1. **粉丝档位**：1w ≤ fans < 50w（之外没有对应报价行）；
-    2. **预算**：按对应档位算上限，图文/视频**任一在预算内即通过**，两个都超才剔。
+    2. **中位数不能为 0／缺失**：曝光中位数或互动中位数为 0 的达人没有可参考的
+       数据表现，不进名单（用户 2026-10-12）。⚠️ 这是**把关，不是排序指标** ——
+       排序规则不变（量级 → 符合度 → 图文报价 → 粉丝数），**不按中位数排**；
+    3. **预算**：按对应档位算上限，图文/视频**任一在预算内即通过**，两个都超才剔。
 
     `stats` 里累计剔除原因与样例，供调用方**如实报数**，而不是悄悄丢掉。
     """
-    stats: dict = {"out_of_range": 0, "over_budget": 0, "samples": []}
+    stats: dict = {"out_of_range": 0, "no_median": 0, "over_budget": 0,
+                   "samples": [], "median_samples": []}
 
     def keep(item: dict) -> bool:
         fans = item.get("fansNum")
         if not in_range(fans):
             stats["out_of_range"] += 1
             return False
+
+        # ⚠️ 这里判 falsy 是**故意的**：0 与 None 都算"没有数据表现"。
+        # 别照着 mapper._apply 那条注释（那里判 None 是因为"0 是合法值，不该显示成空白"）
+        # 把这里改成只判 None —— 两处判的是**两件事**：那边管"表格里显示什么"，
+        # 这边管"这个人进不进名单"。
+        exposure = median_of(item, "曝光中位数")
+        interaction = median_of(item, "互动中位数")
+        if not exposure or not interaction:
+            stats["no_median"] += 1
+            if len(stats["median_samples"]) < 5:
+                stats["median_samples"].append(
+                    f"{item.get('name')}: 曝光={exposure} 互动={interaction}")
+            return False
+
         passed, reason = pricing.within_budget(
             fans, item.get("picturePrice"), item.get("videoPrice"))
         if not passed:

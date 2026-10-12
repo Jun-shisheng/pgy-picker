@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterable
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from backend.providers.pugongying.fields import COLUMNS
@@ -36,6 +36,12 @@ _OVER_BUDGET_FILL = PatternFill("solid", fgColor="FFE9A8")
 _OVER_BUDGET_FONT = Font(bold=True, color="9C5700")
 # 「未有此报价」用灰斜体，让人一眼看出这不是一个价格数字。
 _NO_PRICE_FONT = Font(italic=True, color="A0A5B1")
+
+# 量级分组之间的分隔线（用户 2026-10-12 要求：40w-50w 过渡到 30w-40w 处"划一下"）。
+# 表格本来就按量级降序排，所以"量级这一列的值变了"就是分组边界 ——
+# 在**上一组的最后一行**划一条下框线，一档一档看的时候不会串行。
+# 用 medium 而不是 thin：thin 打印/截图后基本看不见，起不到分隔作用。
+_GROUP_SEPARATOR = Border(bottom=Side(style="medium", color="808080"))
 
 
 def _write_header(ws) -> None:
@@ -78,6 +84,15 @@ def export_excel(rows: Iterable[dict], path: str | Path) -> Path:
             if name in over:
                 cell.fill = _OVER_BUDGET_FILL
                 cell.font = _OVER_BUDGET_FONT
+
+    # 量级分组之间划线：行的顺序是「量级降序」，所以量级一变就是换档了，
+    # 在**上一组的末行**整行划一条下框线（见 _GROUP_SEPARATOR 的说明）。
+    for index in range(len(rows) - 1):
+        if rows[index].get("量级") != rows[index + 1].get("量级"):
+            last_row_of_group = index + 2          # +1 跳过表头，+1 落到"上一行"
+            for column_index in range(1, len(COLUMNS) + 1):
+                cell = ws.cell(row=last_row_of_group, column=column_index)
+                cell.border = _GROUP_SEPARATOR
 
     ws.freeze_panes = "A2"
 

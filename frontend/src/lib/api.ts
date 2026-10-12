@@ -30,6 +30,9 @@ export interface SelectionStatus {
   login_status: number;
   logged_in: boolean;
   role: string;
+  /** 报价档位配没配。**没配 = 预算把关关着**，交付表会混进超预算的达人。 */
+  pricing_configured: boolean;
+  pricing_multiplier: number | null;
 }
 
 export interface IndustryNode {

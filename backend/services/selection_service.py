@@ -206,6 +206,7 @@ def search(params: SearchParams, *, per_tier: int = 20,
     stats["mapped"] = len(rows)
     stats["kept"] = len(rows)
     stats["dropped"] = {"out_of_range": drops["out_of_range"],
+                        "no_median": drops["no_median"],
                         "over_budget": drops["over_budget"]}
     if pricing.load() is None:
         stats["pricing"] = "未配置（预算把关已关闭）"
@@ -217,6 +218,9 @@ def search(params: SearchParams, *, per_tier: int = 20,
              stats["mapped"], stats["pages"], stats["per_tier_counts"], short or "无")
     if drops["samples"]:
         log.info("超预算样例：%s", " | ".join(drops["samples"]))
+    if drops["no_median"]:
+        log.info("因中位数为 0／缺失而剔除 %s 条；样例：%s",
+                 drops["no_median"], " | ".join(drops["median_samples"]))
     stats["per_tier_short"] = short
     return rows, stats
 

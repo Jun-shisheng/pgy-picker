@@ -38,6 +38,45 @@ def test_header_is_the_customer_header_and_rows_follow(tmp_path):
     assert ws.cell(row=1, column=len(COLUMNS) + 1).value is None
 
 
+def test_separator_line_between_tiers(tmp_path):
+    """量级换档处划一条下框线（用户 2026-10-12 要求）。
+
+    行按量级降序排，所以「量级这一列变了」就是换档 —— 线划在**上一组的末行**。
+    """
+    rows = [
+        {"量级": "超头部KOL(40w-50w)", "昵称": "a"},
+        {"量级": "超头部KOL(40w-50w)", "昵称": "b"},
+        {"量级": "头部KOL(30w-40w)", "昵称": "c"},
+        {"量级": "头部KOL(30w-40w)", "昵称": "d"},
+        {"量级": "腰部KOL(10w-20w)", "昵称": "e"},
+    ]
+    ws = load_workbook(export_excel(rows, tmp_path / "提报.xlsx"))["达人提报"]
+
+    def bottom(row: int) -> str | None:
+        return ws.cell(row=row, column=1).border.bottom.style
+
+    # 数据在 2..6 行；换档发生在 index 1→2 与 3→4，即第 3、5 行
+    assert bottom(3) is not None, "第一档的最后一行该有线"
+    assert bottom(5) is not None, "第二档的最后一行该有线"
+    # 组内不划、最后一档（表尾）也不用划
+    assert bottom(2) is None
+    assert bottom(4) is None
+    assert bottom(6) is None, "最后一行是表的结尾，不需要再划一条"
+
+    # 线要横跨整行，不能只划在「量级」那一列上
+    for column in range(1, len(COLUMNS) + 1):
+        assert ws.cell(row=3, column=column).border.bottom.style is not None
+
+
+def test_single_tier_has_no_separator(tmp_path):
+    rows = [{"量级": "头部KOL(30w-40w)", "昵称": "a"},
+            {"量级": "头部KOL(30w-40w)", "昵称": "b"}]
+    ws = load_workbook(export_excel(rows, tmp_path / "提报.xlsx"))["达人提报"]
+
+    assert ws.cell(row=2, column=1).border.bottom.style is None
+    assert ws.cell(row=3, column=1).border.bottom.style is None
+
+
 def test_no_metadata_leaks_into_the_sheet(tmp_path):
     """筛选条件、来源接口这些**不能出现在表里**。"""
     path = export_excel([ROW], tmp_path / "提报.xlsx")

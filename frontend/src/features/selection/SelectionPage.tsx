@@ -185,6 +185,14 @@ export function SelectionPage() {
                   {status.logged_in ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
                   平台登录：{status.logged_in ? "已登录" : "未登录"}
                 </span>
+                <span className={status.pricing_configured
+                  ? "flex items-center gap-1.5 text-success"
+                  : "flex items-center gap-1.5 text-warning"}>
+                  {status.pricing_configured ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
+                  报价档位：{status.pricing_configured
+                    ? `已配置（上限 × ${status.pricing_multiplier ?? "?"}）`
+                    : "未配置"}
+                </span>
               </>
             )}
             <Button variant="secondary" className="h-8 px-3 text-xs" onClick={() => void refreshStatus()}>
@@ -196,6 +204,17 @@ export function SelectionPage() {
               </Link>
             )}
           </div>
+
+          {/* 没配报价档位时，预算把关是关着的 —— 这会直接影响交付物对不对，必须说出来。
+              以前这件事只写在 Excel 的「元信息」表里，那张表已按用户要求删掉。 */}
+          {status && !status.pricing_configured && (
+            <div className="rounded-control border border-warning/40 bg-warning/5 px-3 py-2 text-xs leading-relaxed text-text-secondary">
+              <b className="text-warning">报价档位还没配置 —— 预算把关目前是关着的。</b>
+              也就是说<b>超出报价上限的达人会照样进名单</b>。请把档位表放到
+              <span className="font-mono"> pricing.json</span>
+              （或开发期的 <span className="font-mono">资料和说明\报价档位.json</span>）后刷新。
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -293,7 +312,8 @@ export function SelectionPage() {
 
           <p className="text-xs text-text-tertiary">
             每个量级各取这么多条（超头部/头部/腰部/尾部各一份名单），量级高的序号在前。
-            只收录粉丝 1w–50w、且图文或视频任一在预算内的达人；两个报价都超的会被剔除。
+            只收录粉丝 1w–50w、曝光与互动中位数都不为 0、且图文或视频任一在预算内的达人；
+            两个报价都超的、以及中位数为 0（没有可参考的数据表现）的都会被剔除。
             <br />
             高量级本来人就少，凑不满会<b>如实交少并在结果里标出来</b>，不会为了凑数无限翻页。
           </p>

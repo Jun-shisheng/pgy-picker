@@ -217,18 +217,32 @@ def create_app() -> FastAPI:
 
     @app.get("/api/selection/status")
     def selection_status() -> dict:
-        """选号前置状态：有没有凭据、当前登录态。"""
+        """选号前置状态：有没有凭据、当前登录态、报价档位配没配。
+
+        `pricing_configured` 是**必看的**：没配报价档位时**预算把关是关着的**
+        （`pricing.load()` 返回 None，`within_budget` 一律放行），交付表会混进
+        超预算的达人。这件事以前只写在 Excel 的「元信息」表里，那张表按用户要求删了，
+        所以必须搬到界面上 —— 不然它会彻底隐形。
+        """
+        from backend.providers.pugongying import pricing
         from backend.services import credential_service, selection_service
         try:
             status = selection_service.login_status()
         except Exception as exc:
             log.warning("查询登录态失败：%s", exc)
             status = 0
+        try:
+            pricing_config = pricing.load()
+        except Exception as exc:
+            log.warning("读取报价档位失败：%s", exc)
+            pricing_config = None
         return {
             "has_credentials": credential_service.has_credentials(),
             "login_status": status,
             "logged_in": status == 200,
             "role": selection_service.DEFAULT_ROLE,
+            "pricing_configured": pricing_config is not None,
+            "pricing_multiplier": pricing_config.multiplier if pricing_config else None,
         }
 
     @app.get("/api/selection/progress")

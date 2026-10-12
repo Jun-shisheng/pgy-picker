@@ -80,6 +80,13 @@ def tool_status(client: PgyClient, arguments: dict) -> list[dict]:
     else:
         lines.append("下一步：可以调 `pgy_list_industries` 拿行业，再调 `pgy_start_selection` 开始选号。")
 
+    # 报价档位没配 ⇒ 预算把关是关着的 ⇒ 交付表会混进超预算的达人。
+    # 这件事必须让 Agent 说出来，否则用户拿到的名单是错的却不知道。
+    if status.get("pricing_configured") is False:
+        lines.append("")
+        lines.append("⚠️ **报价档位未配置**：预算把关当前是关着的，"
+                     "超出报价上限的达人也可能进名单。请把这个风险如实告诉用户。")
+
     lines.append("")
     lines.append("说明：本工具对蒲公英**只读**，只做达人数据采集与导出，不会发起任何投放动作。")
     return [_text("\n".join(lines)), _text("原始数据：\n" + _dump(status))]

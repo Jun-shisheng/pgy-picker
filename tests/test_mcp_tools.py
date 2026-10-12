@@ -70,6 +70,32 @@ def test_status_guides_to_the_next_step_when_not_logged_in():
     assert "手动" in text or "人工" in text
 
 
+def test_status_warns_when_the_budget_gate_is_off():
+    """没配报价档位 ⇒ 预算把关关着 ⇒ 名单可能是错的。Agent 必须说出来。"""
+    client = FakeClient({
+        "/api/health": {"status": "ok", "service": "ready"},
+        "/api/selection/status": {"has_credentials": True, "logged_in": True,
+                                  "pricing_configured": False},
+        "/api/account": {"has_credentials": True, "username_masked": "p***"},
+    })
+    text = _texts(tools.tool_status(client, {}))
+
+    assert "报价档位未配置" in text
+    assert "如实告诉用户" in text
+
+
+def test_status_stays_quiet_when_pricing_is_configured():
+    client = FakeClient({
+        "/api/health": {"status": "ok", "service": "ready"},
+        "/api/selection/status": {"has_credentials": True, "logged_in": True,
+                                  "pricing_configured": True},
+        "/api/account": {"has_credentials": True, "username_masked": "p***"},
+    })
+    text = _texts(tools.tool_status(client, {}))
+
+    assert "报价档位未配置" not in text
+
+
 def test_status_tells_the_model_not_to_ask_for_passwords():
     client = FakeClient({
         "/api/health": {"status": "ok", "service": "ready"},

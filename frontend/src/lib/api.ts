@@ -75,8 +75,13 @@ export interface SelectionRunRequest {
 export interface SelectionStats {
   /** 本次翻了几页。 */
   pages: number;
-  /** 单次翻页上限（用于区分「到上限了」与「平台到底了」）。 */
+  /** 整轮翻页安全阀（防失控，通常远达不到）。 */
   page_limit?: number;
+  /** 是否被页数上限**截断**（= 后面还有没取到的，可点「换一批」继续）。 */
+  stopped_by_page_limit?: boolean;
+  /** 被上限截断的关键词个数 / 真翻到底的关键词个数。 */
+  keywords_cut_by_limit?: number;
+  keywords_exhausted?: number;
   /** 本次实际用的关键词。 */
   keywords?: string[];
   /** 各关键词各翻了几页（页数预算按关键词均分）。 */

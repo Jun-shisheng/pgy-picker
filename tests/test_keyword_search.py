@@ -74,14 +74,17 @@ def test_without_a_shared_seen_set_the_same_person_would_repeat(monkeypatch):
 
 # ── 页数预算 ────────────────────────────────────────────────────────────────
 
-def test_page_budget_is_split_evenly_between_keywords(monkeypatch):
-    """预算按关键词均分，否则第一个关键词把预算吃光、后面的轮不到。"""
+def test_each_keyword_gets_its_own_page_allowance(monkeypatch):
+    """**每个关键词各有各的额度**，不是把总预算按个数切。
+
+    曾经是"60 页总预算 ÷ 关键词个数"（7 个词 → 每个 8 页）—— 实测那 8 页把 6 个
+    关键词全截断了，高量级因此凑不满，界面还错报成"平台到底了"。
+    """
     calls: list[tuple[str, int]] = []
 
     def fake_search_all(page, params, **kwargs):
         calls.append((params.keyword, kwargs["max_pages"]))
-        return [], {"pages": kwargs["max_pages"], "total": 0, "per_tier_counts": {},
-                    "reached_end": False}
+        return [], {"pages": 1, "total": 0, "per_tier_counts": {}, "reached_end": False}
 
     monkeypatch.setattr(selection_service, "search_all", fake_search_all)
     monkeypatch.setattr(selection_service.pgy_session, "run_with_page",
@@ -90,8 +93,41 @@ def test_page_budget_is_split_evenly_between_keywords(monkeypatch):
     selection_service.search(SearchParams(), per_tier=5, keywords=["a", "b", "c", "d"])
 
     assert [kw for kw, _ in calls] == ["a", "b", "c", "d"]
-    assert {n for _, n in calls} == {selection_service.PAGES_PER_RUN // 4}
-    assert sum(n for _, n in calls) <= selection_service.PAGES_PER_RUN
+    assert {n for _, n in calls} == {selection_service.PAGES_PER_KEYWORD}
+    # 总额度只是防失控的安全阀，不该把每个词的额度压小
+    assert selection_service.PAGES_PER_RUN >= selection_service.PAGES_PER_KEYWORD * len(calls)
+
+
+def test_reached_end_is_not_claimed_when_a_keyword_was_cut_by_the_limit(monkeypatch):
+    """被页数上限截断 ≠ 平台到底了 —— 这个误报实测把界面骗过。"""
+    def fake_search_all(page, params, **kwargs):
+        # 每个词都恰好翻满上限、且平台报的是"没到底"
+        return [], {"pages": kwargs["max_pages"], "total": 0, "per_tier_counts": {},
+                    "reached_end": False}
+
+    monkeypatch.setattr(selection_service, "search_all", fake_search_all)
+    monkeypatch.setattr(selection_service.pgy_session, "run_with_page",
+                        lambda fn, *args, **kwargs: fn(None))
+
+    _, stats = selection_service.search(SearchParams(), per_tier=5, keywords=["a", "b"])
+
+    assert stats["reached_end"] is False, "被上限截断时不能报「平台到底了」"
+    assert stats["stopped_by_page_limit"] is True
+    assert stats["keywords_cut_by_limit"] == 2
+
+
+def test_reached_end_is_claimed_only_when_every_keyword_exhausted(monkeypatch):
+    def fake_search_all(page, params, **kwargs):
+        return [], {"pages": 2, "total": 0, "per_tier_counts": {}, "reached_end": True}
+
+    monkeypatch.setattr(selection_service, "search_all", fake_search_all)
+    monkeypatch.setattr(selection_service.pgy_session, "run_with_page",
+                        lambda fn, *args, **kwargs: fn(None))
+
+    _, stats = selection_service.search(SearchParams(), per_tier=5, keywords=["a", "b"])
+
+    assert stats["reached_end"] is True
+    assert stats["stopped_by_page_limit"] is False
 
 
 def test_no_keywords_means_one_pass_without_the_field(monkeypatch):

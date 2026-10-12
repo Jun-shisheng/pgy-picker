@@ -37,7 +37,14 @@ DEFAULT_ROLE = "代理商"
 #: 十几条）。60 页 ≈ 3.5 分钟，**这个耗时用户已明确接受**。
 #:
 #: 中途的「连续 6 页无新增就停」兜底仍然有效，所以真到不了 20 也不会真跑满 60 页。
-PAGES_PER_RUN = 60
+PAGES_PER_RUN = 300
+#: **每个关键词**最多翻多少页。
+#:
+#: 原来只有一个 60 页的总预算、按关键词均分（7 个词就是每个 8 页）—— 实测那 8 页
+#: 把 6 个关键词全截断了，高量级因此凑不满，界面还错报成"平台到底了"。
+#: 现在改成**每个关键词各有各的额度**，配合"每档凑够 20 就整轮停"的早停，
+#: 只有真需要时才花这个时间（7 个词 × 30 页最坏约 4 分钟）。
+PAGES_PER_KEYWORD = 30
 KOL_PAGE = "https://pgy.xiaohongshu.com/solar/pre-trade/note/kol"
 EXPORT_DIR = ROOT / "exports"
 
@@ -302,16 +309,16 @@ def search(params: SearchParams, *, per_tier: int = 20,
     # 收出好几倍的量；而且同一个人命中多个关键词时会被重复计入，
     # 变相等于"命中多个提高了优先级"（用户明确说过不该这样）。
     todo = [k.strip() for k in (keywords or []) if k and k.strip()] or [""]
-    # 页数预算按关键词**均分**：否则第一个关键词会把预算吃光，后面的根本轮不到。
-    share = max(1, PAGES_PER_RUN // len(todo))
 
     counts: dict = {}
     seen: set = set()
     raw: list[dict] = []
     pages_read = 0
     max_read = 0
-    hit_limit = False
-    reached_end = False
+    cut_by_limit = False       # 有关键词是被页数上限**截断**的 ⇒ 后面还有没取到的
+    ran_all = False            # 是不是每个关键词都轮到过
+    cut_count = 0
+    exhausted_count = 0
     per_keyword_pages: dict[str, int] = {}
     budget = PAGES_PER_RUN
     total = 0
@@ -320,11 +327,13 @@ def search(params: SearchParams, *, per_tier: int = 20,
         return all(counts.get(k, 0) >= per_tier for k in labels)
 
     def inner(page):
-        nonlocal pages_read, max_read, hit_limit, reached_end, budget, total
+        nonlocal pages_read, max_read, cut_by_limit, ran_all, cut_count
+        nonlocal exhausted_count, budget, total
+        ran = 0
         for keyword in todo:
             if budget <= 0 or satisfied():
                 break
-            budget_for_this = min(share, budget)
+            cap = min(PAGES_PER_KEYWORD, budget)
             one = replace(params, keyword=keyword)
             base = pages_read
 
@@ -334,7 +343,7 @@ def search(params: SearchParams, *, per_tier: int = 20,
             items, st = search_all(
                 page, one, per_tier=per_tier, key_of=key_of, tier_keys=labels,
                 throttle=throttle.default, keep=keep, on_page=on_page,
-                start_page=start_page, max_pages=budget_for_this,
+                start_page=start_page, max_pages=cap,
                 counts=counts, seen=seen)
             raw.extend(items)
             read = int(st.get("pages") or 0)
@@ -343,9 +352,14 @@ def search(params: SearchParams, *, per_tier: int = 20,
             budget -= read
             max_read = max(max_read, read)
             total = st.get("total") or total
-            if read >= budget_for_this and not st.get("reached_end"):
-                hit_limit = True
-            reached_end = reached_end or bool(st.get("reached_end"))
+            ran += 1
+            if st.get("reached_end"):
+                exhausted_count += 1
+            elif read >= cap:
+                # 这个词是被上限截断的，不是"平台没有更多了" —— 别报成到底
+                cut_by_limit = True
+                cut_count += 1
+        ran_all = ran == len(todo)
         return None
 
     progress.begin(progress.SEARCH, "正在翻页检索（浏览器窗口不会自己动，属正常）…")
@@ -357,8 +371,14 @@ def search(params: SearchParams, *, per_tier: int = 20,
         "start_page": start_page,
         # 换一批的落点：每个关键词都从同一个起点往后翻同样的页数，
         # 所以取"各关键词里翻得最多的那个"作为统一的下次起点。
-        "next_page": start_page + (share if hit_limit else max_read),
-        "reached_end": reached_end,
+        "next_page": start_page + (PAGES_PER_KEYWORD if cut_by_limit else max_read),
+        # ⚠️ `reached_end` 必须是**可信的**：只有"每个关键词都轮到过、且都没有被上限截断、
+        # 且都翻到了底"才算到底。原来写的是 `or`（一个关键词到底就报"全到底了"）——
+        # 实测直接把自己骗了：7 个词里有 6 个是被 8 页上限截断的，界面却显示"平台到底了"。
+        "reached_end": ran_all and not cut_by_limit and exhausted_count == len(todo),
+        "stopped_by_page_limit": cut_by_limit or budget <= 0,
+        "keywords_cut_by_limit": cut_count,
+        "keywords_exhausted": exhausted_count,
         "total": total,
         "per_tier_target": per_tier,
         "per_tier_counts": {key: counts.get(key, 0) for key in labels},

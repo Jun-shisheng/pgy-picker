@@ -424,13 +424,13 @@ export function SelectionPage() {
             {/* 说清"这一批是从哪儿取的、下一批从哪儿开始" —— 否则用户会以为
                 每次跑出来都一样是程序坏了（平台排序写死，从头取当然一样）。 */}
             <p className="text-xs text-text-tertiary">
-              本批从第 <b>{result.stats?.start_page ?? 1}</b> 页开始，共翻 {result.stats?.pages ?? "?"} 页
-              {result.stats?.pages === result.stats?.page_limit && !result.stats?.reached_end
-                ? "（已到单次上限）" : ""}
-              。
+              本批共翻 {result.stats?.pages ?? "?"} 页。
               {result.stats?.reached_end
                 ? " 平台这边已经翻到底了，没有更多新人了；「开始检索」会从头再来一遍。"
-                : <> 点<b>「换一批」</b>会从第 {result.stats?.next_page ?? "?"} 页继续往下取没看过的人。</>}
+                : result.stats?.stopped_by_page_limit
+                  ? <> 有 <b>{result.stats?.keywords_cut_by_limit ?? "?"}</b> 个检索词翻到了单次页数上限
+                    —— 后面还有，点<b>「换一批」</b>接着往下取。</>
+                  : <> 部分检索词已经没有更多结果了。点<b>「换一批」</b>会从第 {result.stats?.next_page ?? "?"} 页继续。</>}
             </p>
 
             {/* 各量级实际取到几条。

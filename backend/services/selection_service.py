@@ -13,6 +13,7 @@ import logging
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -185,7 +186,8 @@ def _report_page(page_num: int, collected: int, total: int, counts: dict) -> Non
 
 
 def search(params: SearchParams, *, per_tier: int = 20,
-           start_page: int = 1) -> tuple[list[dict], dict]:
+           start_page: int = 1,
+           keywords: list[str] | None = None) -> tuple[list[dict], dict]:
     """检索并映射成交付行 —— **每个量级各取 `per_tier` 条**。
 
     **本地两道把关**（平台的粉丝量筛选参数尚未破译，见 `search.py`）：
@@ -206,13 +208,78 @@ def search(params: SearchParams, *, per_tier: int = 20,
         index = tier_index(item.get("fansNum"))
         return labels[index] if 0 <= index < len(labels) else "档位外"
 
+    # 关键词（findings F-35）：一个请求只能带一个，所以多关键词要**逐个搜再合并**。
+    # 名额计数与"已收过的人"必须跨关键词共享 —— 否则每个关键词都各自去凑 20 条，
+    # 收出好几倍的量；而且同一个人命中多个关键词时会被重复计入，
+    # 变相等于"命中多个提高了优先级"（用户明确说过不该这样）。
+    todo = [k.strip() for k in (keywords or []) if k and k.strip()] or [""]
+    # 页数预算按关键词**均分**：否则第一个关键词会把预算吃光，后面的根本轮不到。
+    share = max(1, PAGES_PER_RUN // len(todo))
+
+    counts: dict = {}
+    seen: set = set()
+    raw: list[dict] = []
+    pages_read = 0
+    max_read = 0
+    hit_limit = False
+    reached_end = False
+    per_keyword_pages: dict[str, int] = {}
+    budget = PAGES_PER_RUN
+    total = 0
+
+    def satisfied() -> bool:
+        return all(counts.get(k, 0) >= per_tier for k in labels)
+
+    def inner(page):
+        nonlocal pages_read, max_read, hit_limit, reached_end, budget, total
+        for keyword in todo:
+            if budget <= 0 or satisfied():
+                break
+            budget_for_this = min(share, budget)
+            one = replace(params, keyword=keyword)
+            base = pages_read
+
+            def on_page(page_num, _collected, page_total, tier_counts, _base=base):
+                _report_page(_base + page_num, len(seen), page_total, tier_counts)
+
+            items, st = search_all(
+                page, one, per_tier=per_tier, key_of=key_of, tier_keys=labels,
+                throttle=throttle.default, keep=keep, on_page=on_page,
+                start_page=start_page, max_pages=budget_for_this,
+                counts=counts, seen=seen)
+            raw.extend(items)
+            read = int(st.get("pages") or 0)
+            per_keyword_pages[keyword or "（不限）"] = read
+            pages_read += read
+            budget -= read
+            max_read = max(max_read, read)
+            total = st.get("total") or total
+            if read >= budget_for_this and not st.get("reached_end"):
+                hit_limit = True
+            reached_end = reached_end or bool(st.get("reached_end"))
+        return None
+
     progress.begin(progress.SEARCH, "正在翻页检索（浏览器窗口不会自己动，属正常）…")
-    raw, stats = pgy_session.run_with_page(
-        lambda page: search_all(
-            page, params, per_tier=per_tier, key_of=key_of, tier_keys=labels,
-            throttle=throttle.default, keep=keep, on_page=_report_page,
-            start_page=start_page, max_pages=PAGES_PER_RUN))
-    # 排序规则见 `mapper.sort_rows()`（量级 → 符合度 → 图文报价 → 粉丝数）
+    pgy_session.run_with_page(inner)
+
+    stats = {
+        "pages": pages_read,
+        "page_limit": PAGES_PER_RUN,
+        "start_page": start_page,
+        # 换一批的落点：每个关键词都从同一个起点往后翻同样的页数，
+        # 所以取"各关键词里翻得最多的那个"作为统一的下次起点。
+        "next_page": start_page + (share if hit_limit else max_read),
+        "reached_end": reached_end,
+        "total": total,
+        "per_tier_target": per_tier,
+        "per_tier_counts": {key: counts.get(key, 0) for key in labels},
+        "exhausted": not satisfied(),
+        "keywords": [k for k in todo if k],
+        "pages_per_keyword": per_keyword_pages,
+    }
+    # 排序规则见 `mapper.sort_rows()`（量级 → 符合度 → 图文报价 → 粉丝数）。
+    # ⚠️ **匹配度（matchNoteNumber）不参与排序** —— 用户明确：命中多少个关键词
+    # 都不影响优先级，优先级就是粉丝数和报价。
     rows = sort_rows(map_page(raw))
     stats["mapped"] = len(rows)
     stats["kept"] = len(rows)
@@ -236,31 +303,36 @@ def search(params: SearchParams, *, per_tier: int = 20,
     return rows, stats
 
 
-def search_batch(params: SearchParams, *, per_tier: int = 20,
-                 mode: str = "fresh") -> tuple[list[dict], dict]:
+def search_batch(params: SearchParams, *, per_tier: int = 20, mode: str = "fresh",
+                 keywords: list[str] | None = None) -> tuple[list[dict], dict]:
     """按「从头取」或「换一批」取一次名单，并推进游标。
 
     - `mode="fresh"`：从第 1 页开始 —— 同一组条件会得到**同一批人**（排序是平台写死的）；
        同时把游标重置到 `stats["next_page"]`。
     - `mode="next"`：接着该条件**上次翻到的位置**往下取，拿到的是没看过的新人。
 
-    游标按筛选条件分别记（见 `selection_cursor`），换了行业就自动从头来 ——
-    否则会拿"母婴的第 7 页"去翻"美妆的第 7 页"。
+    游标按「筛选条件 + 关键词」分别记（见 `selection_cursor`），
+    换了行业或换了关键词就自动从头来 —— 否则会拿"母婴的第 7 页"去翻"美妆的第 7 页"，
+    或者拿"A 关键词的第 7 页"去当"B 关键词的第 7 页"。
     """
     from backend.services import selection_cursor
 
+    signature = "，".join(k.strip() for k in (keywords or []) if k and k.strip())
     start_page = 1
     if mode == "next":
-        start_page = selection_cursor.load(params.first_industry, params.second_industry)
-        log.info("换一批：从第 %s 页接着翻（一级行业=%r）", start_page, params.first_industry)
+        start_page = selection_cursor.load(params.first_industry, params.second_industry,
+                                          signature)
+        log.info("换一批：从第 %s 页接着翻（一级行业=%r，关键词=%r）",
+                 start_page, params.first_industry, signature)
 
-    rows, stats = search(params, per_tier=per_tier, start_page=start_page)
+    rows, stats = search(params, per_tier=per_tier, start_page=start_page, keywords=keywords)
     selection_cursor.save(params.first_industry, params.second_industry,
-                          stats.get("next_page", start_page + 1))
+                          stats.get("next_page", start_page + 1), signature)
     return rows, stats
 
 
-def run_selection(params: SearchParams, *, per_tier: int = 20, mode: str = "fresh") -> dict:
+def run_selection(params: SearchParams, *, per_tier: int = 20, mode: str = "fresh",
+                  keywords: list[str] | None = None) -> dict:
     """跑完整一次选号：登录 → 检索 → 导出。
 
     **这是唯一的实现**：同步接口 `POST /api/selection/run` 与「启动即返回」的
@@ -275,7 +347,8 @@ def run_selection(params: SearchParams, *, per_tier: int = 20, mode: str = "fres
         # 同时开两个操作只会互相排队，不如当场告诉用户谁在占着。
         with operation_guard("检索达人"):
             ensure_ready()
-            rows, stats = search_batch(params, per_tier=per_tier, mode=mode)
+            rows, stats = search_batch(params, per_tier=per_tier, mode=mode,
+                                       keywords=keywords)
         path = export(rows, params, stats=stats)
     except Exception as exc:
         progress.fail(str(exc))

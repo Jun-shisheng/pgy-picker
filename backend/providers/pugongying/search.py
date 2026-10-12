@@ -32,6 +32,11 @@ class SearchParams:
 
     first_industry: str = ""            # 一级行业 ID（不是名称！）
     second_industry: str = ""           # 二级行业 ID
+    #: **笔记关键词**（用户 2026-10-12 实测，见 findings F-35）：检索页那个搜索框
+    #: （placeholder「按笔记关键词找博主」）打的就是本接口，只是多带这个字段。
+    #: 命中的人会带回 `matchNoteNumber`（命中多少篇笔记）—— 那就是"匹配度"。
+    #: 一个请求只能带**一个**关键词（它是字符串不是数组），多关键词要逐个搜再合并。
+    keyword: str = ""
     fans_num_up: int = 0                # ⚠️ 疑似「粉丝上升数」，**不是**粉丝量下限，保持 0
     note_type: int = 0                  # 0=不限 1=图文 2=视频（平台约定，待复核）
     gender: str | None = None           # 达人性别
@@ -100,6 +105,10 @@ class SearchParams:
             "filterList": [],
             "contentSceneLabel": [],
         }
+        # ⚠️ **只在有关键词时才带这个键**：不带关键词的请求体必须与实测样本逐字节一致
+        # （平台自己的普通检索也不发 `keyword`）。多发一个空串未必等价，不冒这个险。
+        if self.keyword:
+            body["keyword"] = self.keyword
         body.update(self.extras)
         return body
 
@@ -138,7 +147,8 @@ def search_page(page, params: SearchParams, *, page_num: int = 1,
 def search_all(page, params: SearchParams, *, per_tier: int = 20, key_of=None,
                tier_keys=None, keep=None, keep_all: bool = False, page_size: int = 20,
                max_pages: int = 60, stall_pages: int = 6, throttle=None,
-               on_page=None, start_page: int = 1) -> tuple[list[dict], dict]:
+               on_page=None, start_page: int = 1,
+               counts: dict | None = None, seen: set | None = None) -> tuple[list[dict], dict]:
     """翻页取数，**每个量级各凑 `per_tier` 条**（用户 2026-10-12 的要求）。
 
     Args:
@@ -165,7 +175,11 @@ def search_all(page, params: SearchParams, *, per_tier: int = 20, key_of=None,
     **每一次翻页都过 throttle** —— 节流是功能需求不是优化项（`CLAUDE.md` 第三条）。
     """
     collected: list[dict] = []
-    counts: dict = {}
+    # `counts` / `seen` 可以由调用方传进来**跨多次调用共享** —— 多关键词检索时，
+    # 每个关键词各跑一遍本函数，名额计数与"已收过的人"必须是同一份，
+    # 否则每个关键词都会各自去凑 20 条，收出好几倍的量、还大量重复。
+    counts = counts if counts is not None else {}
+    seen = seen if seen is not None else set()
     all_keys = list(tier_keys or [])
     total = 0
     scanned = 0
@@ -203,16 +217,24 @@ def search_all(page, params: SearchParams, *, per_tier: int = 20, key_of=None,
         for item in kols:
             if keep is not None and not keep(item):
                 continue
+            # 去重：同一个达人可能在**多个关键词**下都命中。只收一次，
+            # 也**不重复占名额** —— 否则"命中多个关键词"就变相提高了优先级
+            # （而用户明确说过：命中多个不提高优先级）。
+            uid = item.get("userId") or item.get("redId") or item.get("name")
+            if uid is not None and uid in seen:
+                continue
             if keep_all:
                 collected.append(item)
                 gained += 1
-                continue
-            key = key_of(item) if key_of else 0
-            if counts.get(key, 0) >= per_tier:
-                continue          # 该量级已满，后面同量级的就不要了
-            collected.append(item)
-            counts[key] = counts.get(key, 0) + 1
-            gained += 1
+            else:
+                key = key_of(item) if key_of else 0
+                if counts.get(key, 0) >= per_tier:
+                    continue      # 该量级已满，后面同量级的就不要了
+                collected.append(item)
+                counts[key] = counts.get(key, 0) + 1
+                gained += 1
+            if uid is not None:
+                seen.add(uid)
 
         log.info("第 %s 页：扫描 %s 条，本页新增 %s，累计 %s（平台 total=%s）",
                  page_num, len(kols), gained, len(collected), total)

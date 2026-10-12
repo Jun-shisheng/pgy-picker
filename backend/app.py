@@ -61,6 +61,9 @@ class SelectionRun(BaseModel):
     mode: str = Field(default="fresh",
                       description="`fresh`=从头取（同一条件给同一批人）；"
                                   "`next`=换一批，接着该条件上次翻到的位置往下取")
+    keywords: list[str] = Field(default_factory=list,
+                                description="笔记关键词，命中任意一个即算（各关键词结果合并去重）。"
+                                            "一个请求只能带一个关键词，多个由后端逐个搜。留空=不限")
 
 
 def _mode_of(body: SelectionRun) -> str:
@@ -296,7 +299,8 @@ def create_app() -> FastAPI:
         try:
             # 编排、进度、失败落点都在 service 里（**唯一实现**），见 run_selection。
             return selection_service.run_selection(
-                params, per_tier=body.per_tier, mode=_mode_of(body))
+                params, per_tier=body.per_tier, mode=_mode_of(body),
+                keywords=body.keywords)
         except selection_service.OperationBusy as exc:
             raise OperationHttpError(409, "OPERATION_CONFLICT", str(exc), retryable=True) from exc
         except selection_service.NotReady as exc:
@@ -331,7 +335,8 @@ def create_app() -> FastAPI:
 
         def worker():
             try:
-                selection_service.run_selection(params, per_tier=body.per_tier, mode=mode)
+                selection_service.run_selection(params, per_tier=body.per_tier, mode=mode,
+                                                keywords=body.keywords)
             except Exception:
                 # 失败原因已经写进进度快照了，这里只是别让后台线程的异常刷到 stderr。
                 log.info("后台检索结束（失败原因见进度快照）", exc_info=True)

@@ -44,6 +44,19 @@ function cellText(value: BloggerRow[string]): string {
   return value === null || value === undefined ? "" : String(value);
 }
 
+/**
+ * 把输入框里的一串关键词拆成数组。
+ *
+ * 只按**逗号类分隔符**拆（中英文逗号、顿号、分号、换行），**不拆空格** ——
+ * 关键词本身可能带空格（如 `生活 vlog`），按空格拆会把它切成两半。
+ */
+function parseKeywords(text: string): string[] {
+  return text
+    .split(/[,，、;；\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 /** 登录态是多久以前查的。刚查过就不打扰；久了就如实标一句。 */
 function staleLoginNote(ageSeconds: number | null | undefined) {
   if (ageSeconds === null || ageSeconds === undefined) return null;   // 还没查到过
@@ -64,6 +77,7 @@ export function SelectionPage() {
   const [firstIndustry, setFirstIndustry] = useState("");
   const [secondIndustry, setSecondIndustry] = useState("");
   const [perTier, setPerTier] = useState(20);
+  const [keywordText, setKeywordText] = useState("");
   const [running, setRunning] = useState(false);
   const [runStartedAt, setRunStartedAt] = useState(0);
   const [result, setResult] = useState<SelectionRunResponse | null>(null);
@@ -137,6 +151,7 @@ export function SelectionPage() {
         second_industry: secondIndustry,
         per_tier: perTier,
         mode,
+        keywords: parseKeywords(keywordText),
       }));
       // 检索会顺带把登录做完，回来刷新一下状态与行业清单。
       void refreshStatus();
@@ -165,6 +180,7 @@ export function SelectionPage() {
     }
   };
 
+  const parsedKeywords = parseKeywords(keywordText);
   const children = industries.find((item) => item.value === firstIndustry)?.children ?? [];
   const markedCount = result
     ? result.rows.filter((row) => overBudget(row).size > 0).length
@@ -276,6 +292,16 @@ export function SelectionPage() {
               </select>
             </label>
 
+            <label className="flex min-w-[320px] flex-1 flex-col gap-1.5 text-xs text-text-secondary">
+              笔记关键词（命中任意一个即算；逗号分隔，可留空）
+              <input
+                className="h-9 w-full rounded-control border border-border bg-surface px-3 text-sm text-text-primary"
+                value={keywordText}
+                placeholder="例如：体验, 亲子, 抽象, 戏精, cos, vlog, 活人感"
+                onChange={(event) => setKeywordText(event.target.value)}
+              />
+            </label>
+
             <label className="flex flex-col gap-1.5 text-xs text-text-secondary">
               每个量级取多少条
               <input
@@ -304,6 +330,19 @@ export function SelectionPage() {
               </Button>
             )}
           </div>
+
+          {/* 把拆出来的关键词摆出来：分隔符写错了（比如用空格分隔）能当场看见 */}
+          {parsedKeywords.length > 0 && (
+            <p className="flex flex-wrap items-center gap-1.5 text-xs text-text-tertiary">
+              按 <b>{parsedKeywords.length}</b> 个关键词分别检索、结果合并去重（命中任意一个即算）：
+              {parsedKeywords.map((item) => (
+                <span key={item}
+                      className="rounded-pill bg-surface-secondary px-2 py-0.5 text-text-secondary">
+                  {item}
+                </span>
+              ))}
+            </p>
+          )}
 
           {/* 行业清单的状态：空着的时候必须说清"为什么空、下一步做什么" */}
           {loadingIndustries && (
@@ -344,6 +383,10 @@ export function SelectionPage() {
             会一直翻到<b>每个量级都凑够</b>为止，可能要几分钟（采集有节流，宁可慢不触发风控）。
             超头部本来人就少，可能整池子就凑不满 —— 那种情况会<b>如实交少并标出来</b>，
             不会为了凑数无限翻。
+            <br />
+            填了关键词就按关键词搜（平台那套是「按笔记关键词找博主」）：<b>命中任意一个即算</b>，
+            一个人命中多个也<b>不会因此排在前面</b> —— 先后仍然只看粉丝量和报价。
+            关键词越多、每个词分到的翻页数越少。
           </p>
 
           <ProgressPanel progress={progress.data} startedAtMs={runStartedAt} />

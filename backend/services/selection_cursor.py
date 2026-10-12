@@ -26,9 +26,13 @@ log = logging.getLogger("pgy.selection_cursor")
 CURSOR_FILE = ROOT / "selection-cursor.json"
 
 
-def key_for(first_industry: str, second_industry: str) -> str:
-    """筛选条件 → 游标键。空值用 `*` 占位，免得 `a|` 与 `a|*` 撞车。"""
-    return f"{first_industry or '*'}|{second_industry or '*'}"
+def key_for(first_industry: str, second_industry: str, keywords: str = "") -> str:
+    """筛选条件 → 游标键。空值用 `*` 占位，免得 `a|` 与 `a|*` 撞车。
+
+    **关键词也要进 key**：不同关键词搜出来的是**不同的结果集**，
+    拿"A 关键词的第 7 页"去当"B 关键词的第 7 页"会取回一堆莫名其妙的人。
+    """
+    return f"{first_industry or '*'}|{second_industry or '*'}|{keywords or '*'}"
 
 
 def _read_all() -> dict:
@@ -48,9 +52,9 @@ def _read_all() -> dict:
     return pages if isinstance(pages, dict) else {}
 
 
-def load(first_industry: str, second_industry: str) -> int:
+def load(first_industry: str, second_industry: str, keywords: str = "") -> int:
     """下次该从第几页开始。没有记录就是 1（从头来）。"""
-    value = _read_all().get(key_for(first_industry, second_industry))
+    value = _read_all().get(key_for(first_industry, second_industry, keywords))
     try:
         page = int(value)
     except (TypeError, ValueError):
@@ -58,10 +62,11 @@ def load(first_industry: str, second_industry: str) -> int:
     return max(1, page)
 
 
-def save(first_industry: str, second_industry: str, next_page: int) -> None:
+def save(first_industry: str, second_industry: str, next_page: int,
+         keywords: str = "") -> None:
     """记下"下次从这一页开始"。写不进去只记日志 —— 游标丢了只是下次从头来，不该让检索失败。"""
     pages = _read_all()
-    pages[key_for(first_industry, second_industry)] = max(1, int(next_page))
+    pages[key_for(first_industry, second_industry, keywords)] = max(1, int(next_page))
     try:
         _atomic_write(CURSOR_FILE, json.dumps({"version": 1, "pages": pages},
                                               ensure_ascii=False, indent=2))

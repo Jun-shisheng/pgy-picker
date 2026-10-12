@@ -63,6 +63,12 @@ export interface SelectionRunRequest {
    * `next` = 换一批，接着该条件上次翻到的位置往下取。
    */
   mode?: "fresh" | "next";
+  /**
+   * **笔记关键词**：命中文中任意一个即算（各关键词的结果由后端合并去重）。
+   * 平台上那是检索页的搜索框（「按笔记关键词找博主」），走的**就是同一个接口**。
+   * 一个请求只能带一个关键词，多关键词由后端逐个搜。
+   */
+  keywords?: string[];
 }
 
 export interface SelectionStats {
@@ -70,6 +76,10 @@ export interface SelectionStats {
   pages: number;
   /** 单次翻页上限（用于区分「到上限了」与「平台到底了」）。 */
   page_limit?: number;
+  /** 本次实际用的关键词。 */
+  keywords?: string[];
+  /** 各关键词各翻了几页（页数预算按关键词均分）。 */
+  pages_per_keyword?: Record<string, number>;
   /** 本批从第几页开始取。 */
   start_page?: number;
   /** 下次该从第几页继续（「换一批」的依据）。 */

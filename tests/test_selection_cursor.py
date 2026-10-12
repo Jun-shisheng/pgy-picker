@@ -103,7 +103,7 @@ def test_next_mode_uses_the_saved_cursor(monkeypatch):
     selection_cursor.save("母婴", "", 9)
     seen: dict = {}
 
-    def fake_search(params, *, per_tier, start_page):
+    def fake_search(params, *, per_tier, start_page, keywords=None):
         seen["start_page"] = start_page
         return [], {"next_page": start_page + 2, "per_tier_counts": {}}
 
@@ -119,7 +119,7 @@ def test_fresh_mode_ignores_the_cursor(monkeypatch):
     selection_cursor.save("母婴", "", 9)
     seen: dict = {}
 
-    def fake_search(params, *, per_tier, start_page):
+    def fake_search(params, *, per_tier, start_page, keywords=None):
         seen["start_page"] = start_page
         return [], {"next_page": start_page + 1, "per_tier_counts": {}}
 
@@ -166,7 +166,7 @@ def test_api_accepts_next_mode(client, monkeypatch):
     def fake_ensure_ready():
         return None
 
-    def fake_search_batch(params, *, per_tier, mode):
+    def fake_search_batch(params, *, per_tier, mode, keywords=None):
         calls.append(mode)
         return [], {"next_page": 2, "per_tier_counts": {}, "pages": 1}
 
@@ -190,7 +190,7 @@ def test_api_falls_back_to_fresh_for_unknown_mode(client, monkeypatch):
     calls: list[str] = []
     monkeypatch.setattr(selection_service, "ensure_ready", lambda: None)
     monkeypatch.setattr(selection_service, "search_batch",
-                        lambda params, *, per_tier, mode: (calls.append(mode) or [],
+                        lambda params, *, per_tier, mode, keywords=None: (calls.append(mode) or [],
                                                            {"next_page": 2, "pages": 1}))
     monkeypatch.setattr(selection_service, "export",
                         lambda rows, params, *, stats: Path("x.xlsx"))

@@ -121,7 +121,7 @@
 | 层 | 选型 | 备注 |
 |---|---|---|
 | 桌面壳 | **Tauri 2**（Rust） | NSIS 装包，`externalBin` 带 sidecar |
-| 前端 | React + TypeScript + Vite + TanStack Query/Router | 选号页 / 账户页 / 设置页 |
+| 前端 | React 19 + TypeScript + Vite + Tailwind + TanStack Query/Router | 选号页 / 账户页 / 设置页（`zustand` 在依赖里但无人引用） |
 | 业务内核 | **Python + FastAPI + uvicorn**（`pgy-backend.exe`，PyInstaller onefile） | 只听 `127.0.0.1:18081`；**唯一业务内核**，前端与 MCP 都是薄客户端 |
 | 浏览器自动化 | **Playwright**（程序托管内核） | 复用登录态，全程可见 |
 | 本地存储 | **文件**：`settings.json` / `selection-cursor.json` / `pricing.json` | ⚠️ SQLite **实际没在用**：骨架遗留的 `backend/db/mio_db.py` 目前无人引用 |

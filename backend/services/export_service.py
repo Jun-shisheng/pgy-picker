@@ -18,7 +18,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from backend.providers.pugongying.fields import COLUMNS
-from backend.providers.pugongying.mapper import FLAGS_KEY, NO_PRICE_TEXT, OVER_BUDGET_KEY
+from backend.providers.pugongying.mapper import FLAGS_KEY, NO_QUOTE_KEY, OVER_BUDGET_KEY
 
 # 列宽（按客户表头实际观感给，够看即可）
 #
@@ -29,13 +29,20 @@ _COLUMN_WIDTH = {
     "量级": 20, "序号": 7, "昵称": 22, "粉丝量": 12, "主页链接": 42,
     "IP": 18, "类型": 16, "曝光中位数": 14, "互动中位数": 14, "图文": 12, "视频": 12,
 }
+# 右对齐的列（与界面预览表 `SelectionPage` 的 `NUMERIC` 同一组）。
+# ⚠️ **判据必须是「列」而不是「值的类型」** —— 缺报价那格写的是字符串 `None`
+# （`mapper.NO_PRICE_TEXT`），按 `isinstance(value, (int, float))` 判会把它留成左对齐，
+# 跟同列的报价数字对不齐（用户 2026-10-13 反馈：「None 靠右边和数字一样，不要靠左边」）。
+_RIGHT_ALIGNED = {"序号", "粉丝量", "曝光中位数", "互动中位数", "图文", "视频"}
 _HEADER_FILL = PatternFill("solid", fgColor="F0F0F0")
 # 报价超出该档位上限的单元格底色（浅琥珀）。**只标单元格，不加列、不改结构** ——
 # 客户表头是 11 列，不能因为要标记就多一列出来。
 _OVER_BUDGET_FILL = PatternFill("solid", fgColor="FFE9A8")
 _OVER_BUDGET_FONT = Font(bold=True, color="9C5700")
-# 「未有此报价」用灰斜体，让人一眼看出这不是一个价格数字。
-_NO_PRICE_FONT = Font(italic=True, color="A0A5B1")
+# 「平台没有这个报价」的格子**和超预算一样**：同样的底色、同样的字体
+# （用户 2026-10-13：「和超预算的一样不是白底变个颜色」）。
+# 两者对客户是同一类事 —— "这一格要人看一眼"，排序里也同等对待（都是 `RANK_GROUP_KEY=1`）。
+# 区别只在格子里写什么：超预算是数字，缺报价是 `None` 那个词（见 mapper.NO_PRICE_TEXT）。
 
 # 量级分组之间的分隔线（用户 2026-10-12 要求：40w-50w 过渡到 30w-40w 处"划一下"）。
 # 表格本来就按量级降序排，所以"量级这一列的值变了"就是分组边界 ——
@@ -71,17 +78,20 @@ def export_excel(rows: Iterable[dict], path: str | Path) -> Path:
 
     for row_index, row in enumerate(rows, start=2):
         flags = row.get(FLAGS_KEY) or {}
-        over = set(flags.get(OVER_BUDGET_KEY) or ())   # 如 {"图文"}
+        over = set(flags.get(OVER_BUDGET_KEY) or ())      # 如 {"图文"}
+        no_quote = set(flags.get(NO_QUOTE_KEY) or ())     # 如 {"视频"}
         for column_index, name in enumerate(COLUMNS, start=1):
             cell = ws.cell(row=row_index, column=column_index, value=row.get(name))
-            # 只有真正的数字才右对齐 —— 「未有此报价」是文本，右对齐会显得像数值。
-            if isinstance(cell.value, (int, float)):
+            # 数字列一律右对齐 —— 连缺报价写的那个 `None` 也一起，它得跟同列的报价数字
+            # 对齐（见 `_RIGHT_ALIGNED` 的说明）。
+            if name in _RIGHT_ALIGNED:
                 cell.alignment = Alignment(horizontal="right")
-            elif cell.value == NO_PRICE_TEXT:
-                # 让「未有此报价」一眼看着就不是数字（灰斜体）
-                cell.font = _NO_PRICE_FONT
             # 这一项超了预算上限 → 给这个单元格上色（"一个超一个没超"要能一眼看出来）
             if name in over:
+                cell.fill = _OVER_BUDGET_FILL
+                cell.font = _OVER_BUDGET_FONT
+            elif name in no_quote:
+                # 平台没有这个报价 —— **与超预算同一种标注**（底色 + 字体都一致）。
                 cell.fill = _OVER_BUDGET_FILL
                 cell.font = _OVER_BUDGET_FONT
 

@@ -17,12 +17,22 @@ from .fields import COLUMNS, FIELD_MAP, HOMEPAGE_TEMPLATE, in_range, tier_index,
 # 只用来在渲染时决定"给哪个单元格加底色"、以及排序。
 FLAGS_KEY = "__flags__"
 OVER_BUDGET_KEY = "over_budget"   # 值形如 ["图文"] / ["视频"]
+#: 哪一形态**根本没有报价**（值形如 `["图文"]`）。交付表那格是**空的**，
+#: 但**要加底色**（用户 2026-10-13：「改为 None」+「并且也底色标注」）——
+#: 空的单元格不加标记，会被当成"漏填"而不是"平台没有这个报价"。
+NO_QUOTE_KEY = "no_quote"
 TIER_INDEX_KEY = "tier_index"     # 档位在报价表里的行序（0 在最上）
 RANK_GROUP_KEY = "rank_group"     # 0=图文视频都符合；1=有一个不符（超预算或未有报价）
 IMAGE_SORT_KEY = "image_sort"     # 图文报价排序用（未有报价 = 极大）
 
-# 没有某个报价时在交付表里显示的文案（用户 2026-10-12：「显示未有此报价」）。
-NO_PRICE_TEXT = "未有此报价"
+# 平台没有某个报价时，交付表那格写**英文 `None`**（用户 2026-10-13 明确要求，原话：
+# 「缺报价的地方写英文 None」），并且**和超预算的格子一样加底色**（同一句要求的
+# 「和超预算的一样」）。
+#
+# ⚠️ **这是用户点名要的写法，不是漏改** —— 2026-10-12 那版写的是中文文案
+# 「未有此报价」，2026-10-13 先被要求改掉、又明确要的就是 `None` 这个英文词。
+# 看着像调试残留是对的，但**别顺手"修"成空白或中文**：交付物长什么样是业务定的。
+NO_PRICE_TEXT = "None"
 
 _PURE_DIGITS = re.compile(r"^\d+$")
 
@@ -109,8 +119,14 @@ def map_blogger(item: dict) -> dict:
     row["量级"] = tier_of(fans)   # 如 `头部KOL(10w-20w)`；粉丝数见「粉丝量」列，不重复
     row["序号"] = None          # 渲染时按行序填
 
-    # 报价：先取出数值供排序用，再把「没有的」写成文案
-    # （用户 2026-10-12：「没有某个报价的显示未有此报价」）。
+    # 报价：先取出数值供排序用，再把「没有的」写成 `None` 那个词。
+    #
+    # ⚠️ 顺序要紧：**标记与排序都用数值**（`image_price` / `video_price`），
+    # 写进交付表的那个字符串是最后一步的事 —— 一旦先替换成 "None"，
+    # 预算判定与排序会拿一个字符串当价格用。
+    #
+    # ⚠️ 也别把"没有报价"当成"没数据就别进名单"：进不进名单由 `build_gate()` 判
+    # （那边"没有报价"要与超预算一样往后排，见 RANK_GROUP_KEY）。两件事。
     image_price, video_price = row.get("图文"), row.get("视频")
     over = pricing.over_kinds(fans, image_price, video_price)
     has_both = image_price is not None and video_price is not None
@@ -120,7 +136,7 @@ def map_blogger(item: dict) -> dict:
     ordered["图文"] = image_price if image_price is not None else NO_PRICE_TEXT
     ordered["视频"] = video_price if video_price is not None else NO_PRICE_TEXT
 
-    # 内部标记：排序键 + 超额标记（都不进交付表）
+    # 内部标记：排序键 + 超额/缺报价标记（都不进交付表）
     ordered[FLAGS_KEY] = {
         TIER_INDEX_KEY: tier_index(fans),
         # 0 = 图文视频**都有报价且都在预算内**（最优先）；1 = 有一个不符，往后排。
@@ -128,6 +144,9 @@ def map_blogger(item: dict) -> dict:
         RANK_GROUP_KEY: 0 if (has_both and not over) else 1,
         IMAGE_SORT_KEY: image_price if image_price is not None else float("inf"),
         OVER_BUDGET_KEY: over,
+        # 缺报价的形态：交付表里是空格，靠**底色**告诉人"这不是漏填，是平台没这个价"。
+        NO_QUOTE_KEY: [name for name, price in (("图文", image_price), ("视频", video_price))
+                       if price is None],
     }
     return ordered
 
@@ -167,18 +186,6 @@ def map_page(items: list[dict], *, start_index: int = 1) -> list[dict]:
     return rows
 
 
-def median_of(item: dict, column: str) -> int | None:
-    """按 `FIELD_MAP` 取原始达人字典里某一列的数值（如「曝光中位数」）。
-
-    **故意复用 `FIELD_MAP`**：原始字段名（`accumCoopImpMedinNum30d` 之类）
-    只写在映射表那一处。把关逻辑里再抄一遍的话，平台改字段时必然漏改一处。
-    """
-    spec = FIELD_MAP.get(column)
-    if spec is None:
-        return None
-    return _apply(spec["transform"], [item.get(f) for f in spec["fields"]])
-
-
 def build_gate() -> tuple[Callable[[dict], bool], dict]:
     """构造**统一的「达人有资格进名单吗」判定**。返回 `(keep, stats)`。
 
@@ -190,35 +197,25 @@ def build_gate() -> tuple[Callable[[dict], bool], dict]:
     `keep` 作用在**原始达人字典**上（不是映射后的行），因为翻页时要边取边判，
     剔掉的人不计入 `want`，否则只能交出一份短名单。
 
-    三道关：
+    **两道关**：
     1. **粉丝档位**：1w ≤ fans < 50w（之外没有对应报价行）；
-    2. **中位数不能为 0／缺失**：曝光中位数或互动中位数为 0 的达人没有可参考的
-       数据表现，不进名单（用户 2026-10-12）。⚠️ 这是**把关，不是排序指标** ——
-       排序规则不变（量级 → 符合度 → 图文报价 → 粉丝数），**不按中位数排**；
-    3. **预算**：按对应档位算上限，图文/视频**任一在预算内即通过**，两个都超才剔。
+    2. **预算**：按对应档位算上限，图文/视频**任一在预算内即通过**，两个都超才剔。
+
+    ⚠️ **原来还有第三道「曝光/互动中位数不能为 0／缺失」，2026-10-13 按用户要求删掉了。**
+    同事转达的口径是「曝光中位数缺失不影响我们的筛选」，用户拍板：
+    **两个中位数都不再参与把关**。实测代价要记住 —— 上一轮因这道关剔掉的 97 条，
+    样例**全是「曝光=0 互动=0」**，也就是完全没有任何合作数据的达人；
+    现在他们**会进名单**，交付表里那两格就是 `0` 或空白。
+    中位数仍然**采集、进表**，只是不再决定进不进名单（它也从来不参与排序）。
 
     `stats` 里累计剔除原因与样例，供调用方**如实报数**，而不是悄悄丢掉。
     """
-    stats: dict = {"out_of_range": 0, "no_median": 0, "over_budget": 0,
-                   "samples": [], "median_samples": []}
+    stats: dict = {"out_of_range": 0, "over_budget": 0, "samples": []}
 
     def keep(item: dict) -> bool:
         fans = item.get("fansNum")
         if not in_range(fans):
             stats["out_of_range"] += 1
-            return False
-
-        # ⚠️ 这里判 falsy 是**故意的**：0 与 None 都算"没有数据表现"。
-        # 别照着 mapper._apply 那条注释（那里判 None 是因为"0 是合法值，不该显示成空白"）
-        # 把这里改成只判 None —— 两处判的是**两件事**：那边管"表格里显示什么"，
-        # 这边管"这个人进不进名单"。
-        exposure = median_of(item, "曝光中位数")
-        interaction = median_of(item, "互动中位数")
-        if not exposure or not interaction:
-            stats["no_median"] += 1
-            if len(stats["median_samples"]) < 5:
-                stats["median_samples"].append(
-                    f"{item.get('name')}: 曝光={exposure} 互动={interaction}")
             return False
 
         passed, reason = pricing.within_budget(

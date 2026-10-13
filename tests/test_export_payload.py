@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from backend.core.mio_core import ROOT
+from backend.providers.pugongying import pricing
 from backend.services import settings_service
 from backend.services.selection_service import export_payload
 
@@ -71,9 +72,15 @@ def test_installer_hook_protects_the_same_folder():
     assert f"Pgy\\{settings_service.EXPORT_DIR_NAME}" in text, (
         f"安装脚本里没有 `Pgy\\{settings_service.EXPORT_DIR_NAME}`："
         "交付物会在装/升级/卸载时被删掉")
-    assert "PGY_STASH_EXPORTS" in text and "PGY_RESTORE_EXPORTS" in text
+    # 报价档位表也要保住：装机后它就放在数据目录下（`pricing.CONFIG_CANDIDATES[0]`），
+    # 而那个目录每次装/升级都会被整个删掉。名字**从 pricing.py 取**，
+    # 免得哪天改了档位表的文件名、这里还写着旧的（那正是这个用例要防的"改了 A 忘了 B"）。
+    pricing_name = pricing.CONFIG_CANDIDATES[0].name
+    assert f"Pgy\\{pricing_name}" in text, (
+        f"安装脚本里没有 `Pgy\\{pricing_name}`：用户放的报价档位表会被装包删掉")
+    assert "PGY_STASH_USER_FILES" in text and "PGY_RESTORE_USER_FILES" in text
     # 保留动作必须同时出现在安装与卸载两条路径上
-    assert text.count("!insertmacro PGY_RESTORE_EXPORTS") == 2
+    assert text.count("!insertmacro PGY_RESTORE_USER_FILES") == 2
 
 
 def test_nsis_hook_file_stays_ascii_for_paths():

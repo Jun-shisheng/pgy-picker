@@ -124,8 +124,12 @@ def tool_start_selection(client: PgyClient, arguments: dict) -> list[dict]:
         "first_industry": str(arguments.get("first_industry") or ""),
         "second_industry": str(arguments.get("second_industry") or ""),
         "per_tier": int(arguments.get("per_tier") or 20),
-        "mode": "next" if arguments.get("mode") == "next" else "fresh",
     }
+    # `mode` **只在调用方明确给了才透传** —— "默认取哪个"是后端（唯一业务内核）的语义，
+    # MCP 这边再判一次就是重复实现（CLAUDE.md 第五条），而且一定会漂。
+    requested_mode = str(arguments.get("mode") or "")
+    if requested_mode:
+        body["mode"] = requested_mode
     # 本地启动动作本身不碰浏览器，很快；真正的检索在后台跑。
     result = client.post("/api/selection/start", body, timeout=LOCAL_READ_TIMEOUT_SECONDS)
 
@@ -133,8 +137,8 @@ def tool_start_selection(client: PgyClient, arguments: dict) -> list[dict]:
     lines.append(f"- 一级行业：{body['first_industry'] or '不限'}")
     lines.append(f"- 二级行业：{body['second_industry'] or '不限'}")
     lines.append(f"- 每个量级取：{body['per_tier']} 条")
-    if body["mode"] == "next":
-        lines.append("- 模式：换一批（接着上次翻到的位置往下取）")
+    lines.append("- 模式：**从头取（第 1 页）**" if requested_mode == "fresh"
+                 else "- 模式：默认 —— 接着这组条件上次翻到的位置往下取（给没看过的人）")
     lines.append("")
     lines.append("接下来请**每隔十几秒**调一次 `pgy_selection_progress`，直到 stage 变成 "
                  "`done` 或 `error`。")
@@ -277,9 +281,10 @@ TOOLS: list[dict] = [
                     "type": "string",
                     "enum": ["fresh", "next"],
                     "description": (
-                        "fresh（默认）= 从头取；同一组条件每次都给同一批人，这是平台排序决定的。"
-                        "next = 换一批，接着这组条件上次翻到的位置往下取没看过的人。"
-                        "用户说「就这几个不够」「再来一批」时用 next。"
+                        "**一般不用传**。不传就是后端的默认：接着这组条件上次翻到的位置往下取，"
+                        "给的是没看过的人（平台排序是写死的，每次都从头取的话，"
+                        "池子里剩下的永远轮不到）。"
+                        "只有用户明确说「想再看一遍第 1 页那批人」时才传 fresh。"
                     ),
                 },
             },

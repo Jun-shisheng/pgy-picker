@@ -1,6 +1,6 @@
 [package]
 name = "frontend"
-version = "0.1.3"
+version = "1.0.2"
 description = "蒲公英达人选号本地客户端"
 authors = ["Pgy"]
 edition = "2021"

@@ -79,17 +79,26 @@ export interface SelectionStats {
   page_limit?: number;
   /** 是否被页数上限**截断**（= 后面还有没取到的，可点「换一批」继续）。 */
   stopped_by_page_limit?: boolean;
-  /** 被上限截断的关键词个数 / 真翻到底的关键词个数。 */
+  /** 被上限截断的「档位 × 关键词」组合数。 */
   keywords_cut_by_limit?: number;
   keywords_exhausted?: number;
   /** 本次实际用的关键词。 */
   keywords?: string[];
-  /** 各关键词各翻了几页（页数预算按关键词均分）。 */
+  /**
+   * 哪些量级动用了「不带检索词」的兜底、各补进来几条。
+   * ⚠️ **这些人不保证命中检索词** —— 用户 2026-10-13 拍板接受
+   * （「每个量级必凑满」优先于「只收命中检索词的人」）。
+   */
+  keyword_fallback?: Record<string, number>;
+  /** 每个「档位 × 关键词」各翻了几页（额度是各自算的，不是总预算均分）。 */
   pages_per_keyword?: Record<string, number>;
-  /** 本批从第几页开始取。 */
+  /** 本批各档位从第几页开始取 / 下次各档位从第几页继续（「换一批」的依据）。 */
   start_page?: number;
-  /** 下次该从第几页继续（「换一批」的依据）。 */
+  start_pages?: Record<string, number>;
   next_page?: number;
+  next_pages?: Record<string, number>;
+  /** 没凑满的档位 → 实际条数（高量级本来就少，如实报）。 */
+  tiers_short?: Record<string, number>;
   /** 平台那边已经没数据了（与"没凑满名额"是两回事）。 */
   reached_end?: boolean;
   total: number;

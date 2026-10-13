@@ -22,16 +22,28 @@ class SearchParams:
     """一次检索的条件。字段名尽量贴近业务语言，翻译在 `to_body()` 里。
 
     ⚠️ **尚未破译的参数（不要凭名字猜）**：
-    - **粉丝量筛选**：不知道它编码在哪个字段。`fansNumUp` **不是**粉丝数下限 ——
-      实测把它设成 10000 会让 total 直接从 5000 变成 0，而它旁边就有 `fansRiseNum`，
-      多半是「粉丝**上升**数」。真正的粉丝量筛选参数待**驱动 UI 后抓包**确认。
-      在那之前 `fans_num_up` 保持 0（不限），不要拿它当业务筛选用。
+    - `fansNumUp` **不是**粉丝数下限 —— 实测把它设成 10000 会让 total 直接从 5000
+      变成 0，而它旁边就有 `fansRiseNum`，多半是「粉丝**上升**数」。保持 0，别动它。
     - **一级/二级行业**：`firstIndustry`/`secondIndustry` 要的是**ID 不是名称**
       （母婴 = `698c373db570b54469f1b874`），枚举见 `/api/pgy/kol/get_industry_tag`。
+
+    ✅ **粉丝量区间**（2026-10-13 已破译，见 `findings.md` F-40）：
+    `fansNumberLower` / `fansNumberUpper`，两个**平铺**的整数键。
+    ⚠️ 平台界面保存的筛选方案里那个 `fansCount` 是**界面自己的状态形状**，
+    照它构造的四种写法实测**全部被接口忽略**（返回结果与不传时逐条相同）——
+    别再照着 `fansCount` 猜了。正确形状是驱动界面抓包抓到的。
     """
 
     first_industry: str = ""            # 一级行业 ID（不是名称！）
     second_industry: str = ""           # 二级行业 ID
+    #: 粉丝量区间（闭区间语义按平台界面：下界、上界都给）。**0 表示不限**，
+    #: 两个都是 0 时**不带这两个键** —— 不带条件的请求体必须与实测样本逐字节一致。
+    #:
+    #: 为什么要它：不传时平台按 `comprehensiverank` 返回各种粉丝量的人，高量级在里面
+    #: 稀疏，本地再剔 ⇒ 超头部永远凑不满（实测 40w-50w 只有 3 条）。
+    #: 带上它以后按档位逐个问平台，那一档单独就有 **2150** 人。
+    fans_lower: int = 0
+    fans_upper: int = 0
     #: **笔记关键词**（用户 2026-10-12 实测，见 findings F-35）：检索页那个搜索框
     #: （placeholder「按笔记关键词找博主」）打的就是本接口，只是多带这个字段。
     #: 命中的人会带回 `matchNoteNumber`（命中多少篇笔记）—— 那就是"匹配度"。
@@ -109,6 +121,10 @@ class SearchParams:
         # （平台自己的普通检索也不发 `keyword`）。多发一个空串未必等价，不冒这个险。
         if self.keyword:
             body["keyword"] = self.keyword
+        # 同理：**不限粉丝量时不带这两个键**（界面自己也是——不设区间就不发）。
+        if self.fans_lower or self.fans_upper:
+            body["fansNumberLower"] = int(self.fans_lower or 0)
+            body["fansNumberUpper"] = int(self.fans_upper or 0)
         body.update(self.extras)
         return body
 

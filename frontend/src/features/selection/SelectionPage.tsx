@@ -3,7 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
-  AlertCircle, CheckCircle2, Download, FolderOpen, Loader2, Play, RefreshCw,
+  AlertCircle, CheckCircle2, Download, FolderOpen, Loader2, Play, RefreshCw, RotateCcw,
 } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
@@ -33,11 +33,23 @@ const NUMERIC = new Set(["序号", "粉丝量", "曝光中位数", "互动中位
 /** 行上的内部标记（不进交付表，只用来加底色）。 */
 interface RowFlags {
   over_budget?: string[];
+  no_quote?: string[];
+}
+
+function flagsOf(row: BloggerRow): RowFlags {
+  return ((row as Record<string, unknown>).__flags__ as RowFlags | undefined) ?? {};
 }
 
 function overBudget(row: BloggerRow): Set<string> {
-  const flags = (row as Record<string, unknown>).__flags__ as RowFlags | undefined;
-  return new Set(flags?.over_budget ?? []);
+  return new Set(flagsOf(row).over_budget ?? []);
+}
+
+/**
+ * 平台**没有这个报价**的形态。交付表里那格写英文 `None`（用户 2026-10-13 明确要的写法），
+ * 标注与超预算**完全一致**（同底色同名色号字体）—— 那个 `None` 不是调试残留，别改。
+ */
+function noQuote(row: BloggerRow): Set<string> {
+  return new Set(flagsOf(row).no_quote ?? []);
 }
 
 function cellText(value: BloggerRow[string]): string {
@@ -45,14 +57,20 @@ function cellText(value: BloggerRow[string]): string {
 }
 
 /**
- * 把输入框里的一串关键词拆成数组。
+ * 把输入框里的一串检索词拆成数组。
  *
- * 只按**逗号类分隔符**拆（中英文逗号、顿号、分号、换行），**不拆空格** ——
- * 关键词本身可能带空格（如 `生活 vlog`），按空格拆会把它切成两半。
+ * 分隔符：逗号类（中英文逗号、顿号、分号、换行）、**连续两个以上的空格**、
+ * 以及**全角空格**。
+ *
+ * ⚠️ **单个半角空格不算分隔符**：关键词本身可能带空格（如 `生活 vlog`），
+ * 按空格一味地拆会把它切成两半（拿半个词去搜，结果也不是你要的）。
+ * 代价是"用一个空格隔开两个词"会被当成**一个**词 —— 所以两个以上空格才算分隔，
+ * 界面上也写明了用逗号分隔。
+ * （2026-10-13 实测踩到：`亲子达人  抽象` 被当成一个词搜，白丢一个关键词的检索机会。）
  */
 function parseTerms(text: string): string[] {
   return text
-    .split(/[,，、;；\n]+/)
+    .split(/[,，、;；\n]+|[ \t]{2,}|\u3000+/)
     .map((item) => item.trim())
     .filter(Boolean);
 }
@@ -137,10 +155,13 @@ export function SelectionPage() {
   }, [refreshStatus, loadIndustries]);
 
   /**
-   * `fresh` = 从头取（同一组条件给同一批人，平台排序是写死的）；
-   * `next` = 换一批，接着这组条件上次翻到的位置往下取真正没看过的人。
+   * `next`（默认）= 接着这组条件**上次翻到的位置**往下取，拿到的是没看过的新人；
+   * `fresh` = **显式**从第 1 页起（同一组条件必然给同一批人，平台排序是写死的）。
+   *
+   * 为什么默认是 `next`（用户 2026-10-13）：平台排序写死 ⇒ 每次都从头取＝每次发同一批，
+   * 池子里剩下的永远不可知。要"再看一遍第 1 页"就用「从头开始」。
    */
-  const run = async (mode: "fresh" | "next" = "fresh") => {
+  const run = async (mode: "fresh" | "next" = "next") => {
     setError("");
     setRunning(true);
     setResult(null);
@@ -182,8 +203,14 @@ export function SelectionPage() {
 
     const children = industries.find((item) => item.value === firstIndustry)?.children ?? [];
   const markedCount = result
-    ? result.rows.filter((row) => overBudget(row).size > 0).length
+    ? result.rows.filter((row) => overBudget(row).size > 0 || noQuote(row).size > 0).length
     : 0;
+
+  /** 哪些量级动用了「不带检索词」的兜底、各补了几条。这些**不保证命中检索词**，必须当面说。 */
+  const fallbackTiers = Object.entries(
+    (result?.stats?.keyword_fallback as Record<string, number> | undefined) ?? {},
+  );
+  const hasFallback = fallbackTiers.length > 0;
 
   return (
     <div className="space-y-4">
@@ -292,7 +319,7 @@ export function SelectionPage() {
             </label>
 
             <label className="flex min-w-[320px] flex-1 flex-col gap-1.5 text-xs text-text-secondary">
-              检索词（逗号分隔，可留空）
+              检索词（逗号或两个空格分隔，可留空）
               <input
                 className="h-9 w-full rounded-control border border-border bg-surface px-3 text-sm text-text-primary"
                 value={termText}
@@ -311,23 +338,20 @@ export function SelectionPage() {
               />
             </label>
 
-            <Button onClick={() => void run("fresh")} disabled={running}>
+            <Button onClick={() => void run("next")} disabled={running}>
               {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               {running ? "检索中…" : "开始检索"}
             </Button>
-            {/* 「换一批」只在已经取过之后才有意义：它接着上次翻到的位置往下走。 */}
-            {result && !running && (
-              <Button
-                variant="secondary"
-                onClick={() => void run("next")}
-                disabled={result.stats?.reached_end === true}
-                title={result.stats?.reached_end
-                  ? "平台这边已经翻到底了，没有更多新人了"
-                  : "接着上次翻到的位置往下取没看过的人"}
-              >
-                <RefreshCw className="h-4 w-4" /> 换一批
-              </Button>
-            )}
+            {/* 「从头开始」是**显式**的重来 —— 同一组条件给的是同一批人（平台排序写死），
+                所以它平时用不到，留着只是"我就想再看一遍第 1 页那批人"。 */}
+            <Button
+              variant="secondary"
+              onClick={() => void run("fresh")}
+              disabled={running}
+              title="从第 1 页重新取 —— 同一组条件给的是同一批人（平台排序是写死的）"
+            >
+              <RotateCcw className="h-4 w-4" /> 从头开始
+            </Button>
           </div>
 
           {/* 行业清单的状态：空着的时候必须说清"为什么空、下一步做什么" */}
@@ -363,16 +387,24 @@ export function SelectionPage() {
             超头部KOL（40w–50w / 30w–40w）、头部KOL（20w–30w / 10w–20w）、
             腰部KOL（5w–10w）、尾部KOL（1w–5w）。
             <br />
-            只收录粉丝 1w–50w、曝光与互动中位数都不为 0、且图文或视频任一在预算内的达人；
-            两个报价都超的、以及中位数为 0 的都会被剔除。
+            只收录粉丝 1w–50w、且图文或视频任一在预算内的达人；两个报价都超的会被剔除。
+            曝光/互动中位数<b>照样采集进表，但不再作为收录条件</b>（2026-10-13 起）。
             <br />
             会一直翻到<b>每个量级都凑够</b>为止，可能要几分钟（采集有节流，宁可慢不触发风控）。
-            超头部本来人就少，可能整池子就凑不满 —— 那种情况会<b>如实交少并标出来</b>，
-            不会为了凑数无限翻。
             <br />
-            检索词里 <b>哪个是行业、哪个是笔记关键词，程序自己判断</b>（你只管把词丢进来）。
-            命中<b>任意一个</b>即算；一个人命中多个也<b>不会因此排在前面</b> ——
-            先后仍然只看粉丝量和报价。词越多、每个词分到的翻页数越少。
+            某个量级光靠检索词凑不满时（比如 40w–50w 挂上词以后只剩几十人），会
+            <b>丢开检索词、按这一档的粉丝区间再翻一遍</b>把这一档补满 ——
+            ⚠️ <b>这样补进来的人不保证命中你的检索词</b>（哪档补了几条记在运行日志里）。
+            确实一整档都没更多人时，才<b>如实交少</b>。
+            <br />
+            检索词用<b>逗号</b>或<b>两个空格</b>分隔（单个空格算词的一部分，
+            `生活 vlog` 这种不会被拆开）。词里 <b>哪个是行业、哪个是笔记关键词，程序自己判断</b>
+            （你只管把词丢进来）。命中<b>任意一个</b>即算；一个人命中多个也<b>不会因此排在前面</b>
+            —— 先后仍然只看粉丝量和报价。
+            <br />
+            同一组条件<b>再点一次「开始检索」给的是没看过的人</b>（接着上次翻到的位置往下取）——
+            平台排序是写死的，每次都从头取的话，池子里剩下的永远轮不到。
+            想看第 1 页那批人就点<b>「从头开始」</b>。
           </p>
 
           <ProgressPanel progress={progress.data} startedAtMs={runStartedAt} />
@@ -422,16 +454,26 @@ export function SelectionPage() {
             </div>
 
             {/* 说清"这一批是从哪儿取的、下一批从哪儿开始" —— 否则用户会以为
-                每次跑出来都一样是程序坏了（平台排序写死，从头取当然一样）。 */}
+                每次跑出来都不一样/一样是程序坏了（平台排序写死，从头取当然一样）。 */}
             <p className="text-xs text-text-tertiary">
               本批共翻 {result.stats?.pages ?? "?"} 页。
               {result.stats?.reached_end
-                ? " 平台这边已经翻到底了，没有更多新人了；「开始检索」会从头再来一遍。"
+                ? " 平台这边已经翻到底了，没有更多新人了 —— 再点「开始检索」会回到第 1 页。"
                 : result.stats?.stopped_by_page_limit
-                  ? <> 有 <b>{result.stats?.keywords_cut_by_limit ?? "?"}</b> 个检索词翻到了单次页数上限
-                    —— 后面还有，点<b>「换一批」</b>接着往下取。</>
-                  : <> 部分检索词已经没有更多结果了。点<b>「换一批」</b>会从第 {result.stats?.next_page ?? "?"} 页继续。</>}
+                  ? <> 有 <b>{result.stats?.keywords_cut_by_limit ?? "?"}</b> 个「量级 × 检索词」组合翻到了页数上限
+                    —— 后面还有，再点<b>「开始检索」</b>接着往下取新人。</>
+                  : <> 部分量级已经没有更多结果了。再点<b>「开始检索」</b>会给没看过的下一批人。</>}
             </p>
+
+            {/* 兜底必须**当面说清**：这些人是丢开检索词补进来的，不保证命中你输入的词。
+                不说的话，用户会以为名单里每个人都命中了检索词（交付物里也看不出来）。 */}
+            {hasFallback && (
+              <p className="rounded-control border border-warning/40 bg-warning/5 px-3 py-2 text-xs leading-relaxed text-text-secondary">
+                <b className="text-warning">有 {fallbackTiers.length} 个量级是丢掉检索词补满的</b>
+                （{fallbackTiers.map(([tier, n]) => `${tier} 补 ${n} 条`).join("；")}）。
+                <b>这些人不保证命中你输入的检索词</b> —— 是为了让每个量级都凑够才补的。
+              </p>
+            )}
 
             {/* 各量级实际取到几条。
                 **不再逐档标"没凑满"**：单次只翻 15 页，翻不满是常态而不是异常，
@@ -447,8 +489,9 @@ export function SelectionPage() {
 
             {markedCount > 0 && (
               <p className="rounded-control border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-text-secondary">
-                底色标出的单元格 = 该项报价超出该粉丝档位的上限（按规则仍保留，
-                因为图文、视频有一项在预算内）。共 {markedCount} 条。
+                底色标出的单元格有两种：<b>超出该粉丝档位上限</b>的报价（按规则仍保留，
+                因为图文、视频有一项在预算内），以及<b>平台根本没有这个报价</b>的形态
+                —— 后者交付表里写的是 <b>None</b>，标注与超预算完全相同。共 {markedCount} 条。
               </p>
             )}
 
@@ -464,6 +507,7 @@ export function SelectionPage() {
                 <tbody>
                   {result.rows.map((row, index) => {
                     const over = overBudget(row);
+                    const none = noQuote(row);
                     return (
                       <tr key={index} className="border-t border-border hover:bg-surface-hover">
                         {COLUMNS.map((column) => (
@@ -472,9 +516,18 @@ export function SelectionPage() {
                             className={[
                               "whitespace-nowrap px-3 py-2",
                               NUMERIC.has(column) ? "text-right tabular-nums" : "",
-                              over.has(column) ? "bg-warning/20 font-semibold text-text-primary" : "text-text-primary",
+                              over.has(column) || none.has(column)
+                                ? "bg-warning/20 text-text-primary"
+                                : "text-text-primary",
+                              over.has(column) ? "font-semibold" : "",
                             ].join(" ")}
-                            title={`${cellText(row[column])}${over.has(column) ? "（超出该档位上限）" : ""}`}
+                            title={`${cellText(row[column])}${
+                              over.has(column)
+                                ? "（超出该档位上限）"
+                                : none.has(column)
+                                  ? "（平台没有这一形态的报价）"
+                                  : ""
+                            }`}
                           >
                             {column === "主页链接" && row[column] ? (
                               <a className="text-primary hover:underline" href={String(row[column])} target="_blank" rel="noreferrer">

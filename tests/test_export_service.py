@@ -15,8 +15,62 @@ from backend.services.export_service import export_excel
 ROW = {
     "量级": "头部KOL(10w-20w)", "序号": 1, "昵称": "某达人", "粉丝量": 123456,
     "主页链接": "https://example.invalid/u/1", "IP": "浙江", "类型": "母婴",
-    "曝光中位数": 10000, "互动中位数": 200, "图文": 3000, "视频": "未有此报价",
+    "曝光中位数": 10000, "互动中位数": 200, "图文": 3000, "视频": "None",
 }
+
+
+def test_a_missing_price_cell_is_marked_like_an_over_budget_one(tmp_path):
+    """缺报价那格：写 `None` 那个词 + **和超预算同一种标注**（用户 2026-10-13）。
+
+    用户原话：「缺报价的地方写英文 None」「和超预算的一样不是白底变个颜色」。
+    所以这里连底色带字体一起比 —— 两处**必须完全一致**，只差格子里写什么。
+    """
+    normal = {**ROW, "视频": 4000, "__flags__": {"over_budget": [], "no_quote": []}}
+    missing = {**ROW, "__flags__": {"over_budget": [], "no_quote": ["视频"]}}
+    over = {**ROW, "图文": 20000, "__flags__": {"over_budget": ["图文"], "no_quote": []}}
+    ws = load_workbook(export_excel([normal, missing, over], tmp_path / "提报.xlsx"))["达人提报"]
+
+    video = COLUMNS.index("视频") + 1
+    image = COLUMNS.index("图文") + 1
+
+    missing_cell = ws.cell(row=3, column=video)
+    over_cell = ws.cell(row=4, column=image)
+
+    assert missing_cell.value == "None", "缺报价写英文 None"
+    assert missing_cell.fill.fgColor.rgb == over_cell.fill.fgColor.rgb, "底色要和超预算一致"
+    assert missing_cell.font.color.rgb == over_cell.font.color.rgb
+    assert missing_cell.font.bold == over_cell.font.bold
+    # 没被标记的格子保持白底
+    assert ws.cell(row=2, column=video).fill.fgColor.rgb != over_cell.fill.fgColor.rgb
+
+
+def test_the_none_text_is_right_aligned_like_the_numbers(tmp_path):
+    """缺报价那格写的 `None`，要和同列的报价数字一样**右对齐**（用户 2026-10-13）。
+
+    用户原话：「None 靠右边和数字一样，不要靠左边」。
+    ⚠️ 判据是**列**不是值的类型 —— `None` 是字符串，按 `isinstance(value, (int, float))`
+    判会把它留成左对齐，跟同列的数字对不齐（这就是当时那个 bug）。
+    """
+    ws = load_workbook(export_excel([ROW], tmp_path / "提报.xlsx"))["达人提报"]
+
+    video = COLUMNS.index("视频") + 1
+    image = COLUMNS.index("图文") + 1
+    name = COLUMNS.index("昵称") + 1
+
+    assert ws.cell(row=2, column=video).value == "None"
+    assert ws.cell(row=2, column=video).alignment.horizontal == "right", \
+        "缺报价的 None 必须和同列数字一样右对齐"
+    assert ws.cell(row=2, column=image).alignment.horizontal == "right", "数字列右对齐"
+    # 反向钉住：不是"整张表都右对齐" —— 文本列保持默认（左）。
+    assert ws.cell(row=2, column=name).alignment.horizontal != "right"
+
+
+def test_a_real_number_is_still_a_number_next_to_the_none_text(tmp_path):
+    """同一行里：有报价的形态仍是数字，没报价的才是 `None` 那个词。"""
+    ws = load_workbook(export_excel([ROW], tmp_path / "提报.xlsx"))["达人提报"]
+
+    assert ws.cell(row=2, column=COLUMNS.index("图文") + 1).value == 3000
+    assert ws.cell(row=2, column=COLUMNS.index("视频") + 1).value == "None"
 
 
 def test_workbook_has_exactly_one_sheet(tmp_path):

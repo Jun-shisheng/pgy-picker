@@ -58,9 +58,10 @@ class SelectionRun(BaseModel):
     second_industry: str = ""
     per_tier: int = Field(default=20, ge=1, le=500, description="**每个量级**取多少条")
     interval: float = Field(default=1.5, ge=0.5, le=30.0, description="翻页间隔秒数；保守优先")
-    mode: str = Field(default="fresh",
-                      description="`fresh`=从头取（同一条件给同一批人）；"
-                                  "`next`=换一批，接着该条件上次翻到的位置往下取")
+    mode: str = Field(default="next",
+                      description="`next`（默认）=接着该条件上次翻到的位置往下取，"
+                                  "给的是没看过的人；`fresh`=显式从头取，"
+                                  "同一组条件必然给同一批人")
     terms: list[str] = Field(default_factory=list,
                              description="随手输入的一串检索词（逗号分隔那串，界面已拆好）。"
                                          "**由后端自己判断**哪个是行业、哪个是笔记关键词 —— "
@@ -68,9 +69,13 @@ class SelectionRun(BaseModel):
 
 
 def _mode_of(body: SelectionRun) -> str:
-    """认不出来的 `mode` 一律当「从头取」：宁可按保守语义走，
-    也不要因为拼错一个词就 422（两个入口共用这一份判断）。"""
-    return "next" if body.mode == "next" else "fresh"
+    """默认 **`next`**（接着上次的位置往下取）；只有**显式**写 `fresh` 才从头取。
+
+    为什么默认不是从头取（用户 2026-10-13 拍板）：平台排序是写死的 ⇒ 每次都从第 1 页
+    取＝每次都发同一批人，池子里剩下的**永远不可知**。认不出来的值也一律当 `next`
+    —— 既免得拼错一个词就 422，也免得"默默退回每次给同一批"。
+    """
+    return "fresh" if body.mode == "fresh" else "next"
 
 
 class AccountUpsert(BaseModel):
@@ -108,7 +113,7 @@ def create_app() -> FastAPI:
 
     # ⚠️ 版本号必须是这里的**字面量**：build-installer.ps1 会用正则从本文件读出它，
     # 与 tauri.conf.json / Cargo.toml / frontend/package.json 做一致性校验。
-    app = FastAPI(title="Pgy 本地服务", version="0.1.3", lifespan=lifespan)
+    app = FastAPI(title="Pgy 本地服务", version="1.0.2", lifespan=lifespan)
 
     # ---------- 错误信封 ----------
 

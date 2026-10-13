@@ -21,7 +21,8 @@ from backend.core.mio_core import ROOT
 from backend.providers.pugongying import login as pgy_login
 from backend.providers.pugongying import pricing
 from backend.providers.pugongying import session as pgy_session
-from backend.providers.pugongying.fields import tier_index, tier_labels
+from backend.providers.pugongying import type_map
+from backend.providers.pugongying.fields import TIERS, tier_index, tier_labels
 from backend.providers.pugongying.mapper import build_gate, map_page, sort_rows
 from backend.providers.pugongying.search import SearchParams, search_all
 from backend.services import credential_service, progress, settings_service, throttle
@@ -47,6 +48,17 @@ PAGES_PER_RUN = 300
 PAGES_PER_KEYWORD = 30
 KOL_PAGE = "https://pgy.xiaohongshu.com/solar/pre-trade/note/kol"
 EXPORT_DIR = ROOT / "exports"
+
+
+def combo_key(tier_key: str, keyword: str) -> str:
+    """「档位 × 关键词」—— 游标、每格翻页数都按这个键。
+
+    ⚠️ **关键词必须进键**（2026-10-13 修）：同一档里不同关键词是**不同的结果集**，
+    页码不能互相挪用；兜底那一趟（不带检索词）更是一个**独立的池子**。
+    以前键里只有档位，于是兜底那趟会把关键词几趟的页码位置覆盖掉 ——
+    下一次「换一批」就拿着"无关键词池的第 7 页"去当"某关键词的第 7 页"用。
+    """
+    return f"{tier_key} × {keyword or '（不限）'}"
 
 
 class NotReady(RuntimeError):
@@ -200,77 +212,114 @@ def _industry_flat(industries: list[dict]) -> list[dict]:
     return [item for item in flat if item["label"] and item["value"]]
 
 
-def _common_chars(a: str, b: str) -> str:
-    """两个词之间最长的连续公共子串（只在 ≥2 个字时才算"像"）。"""
-    best = ""
-    for i in range(len(a)):
-        for j in range(i + 2, len(a) + 1):
-            piece = a[i:j]
-            if piece in b and len(piece) > len(best):
-                best = piece
-    return best
-
-
-def classify_terms(terms: list[str]) -> tuple[list[dict], str]:
+def classify_terms(terms: list[str], *,
+                   industries: list[dict] | None = None) -> tuple[list[dict], str]:
     """把用户随手输入的一串词分成「行业」与「关键词」。返回 `(结果, 行业清单来源)`。
 
-    ⚠️ **这是"猜"，所以结果必须摆给用户看**（用户 2026-10-12 定的做法）：
-    猜错了不能静默——静默就是给出一份错的名单而使用者不知道。
+    **只有两条可解释的路径**（用户 2026-10-13 定的口径：词要么沿着讲得通的路径
+    落到一个平台实体上，要么**拒绝映射**，不许拿字符串硬凑）：
 
-    **规则（从强到弱，命中即止）**：
-
-    | 档 | 判据 | 例子 |
+    | 路径 | 判据 | 结果 |
     |---|---|---|
-    | `exact` | 去空格后与行业 label **完全相同** | 「母婴」→ 母婴 |
-    | `contains` | label 与词**互相包含**（长度 ≥ 2） | 「母婴用品」→ 母婴 |
-    | `overlap` | 有 **≥ 2 个连续相同汉字** | 「亲子达人」→「亲子家庭」（共有「亲子」） |
-    | `none` | 都不中 | → 当**关键词** |
+    | 1. 平台正式名 | 与**活的**行业 label 完全相同 | → 按行业筛（`match="exact"`） |
+    | 2. 映射表 | `type_map.TYPE_MAP` 里有一行 | 按该行的 `decision` 走 |
+    | 都没有 | — | → **拒绝映射**，按笔记关键词搜（`match="no_path"`） |
 
-    `overlap` 是**启发式**，多候选时把它们全返回（`candidates`），
-    界面据此提示"这个词像谁不确定"，由人来定。
+    ⚠️ **这里原来还有一档 `overlap`（≥2 个连续汉字就算"像"），已删除。**
+    它正是「抽象 → 亲子」这类无逻辑映射的来源 —— 详见 `type_map.py` 顶部的说明
+    与 `findings.md` F-39：平台的行业树**根本没有**那些词，而字面对得上的
+    「亲子家庭 / 贵妇体验」挂在汽车、母婴纸品下面，语义完全是另一回事。
+
+    拒绝映射**不等于把词丢掉**：它降级为笔记关键词继续起作用，同时把
+    `reason` / `evidence` 记进明细与运行日志 —— 判断是隐性的（界面不摆），
+    但事后必须查得出来（`CLAUDE.md` 第九条）。
+
+    行业清单取不到时（没登录 / 没快照）**不抛异常**：映射表是静态的，它的判定
+    仍然有效，只是"与平台正式名完全相同"那条路径失去依据 —— 明细里如实标注来源。
     """
-    industries, source = industries_cached()
+    if industries is None:
+        try:
+            industries, source = industries_cached()
+        except Exception:
+            log.warning("行业清单取不到，本次不做「与平台行业名完全相同」的判定",
+                        exc_info=True)
+            industries, source = [], "unavailable"
+    else:
+        # 调用方直接给了清单（测试、或将来从快照走）—— 不声明来源，别假称是活的。
+        source = "given"
     flat = _industry_flat(industries)
     results: list[dict] = []
+
+    def find_label(label: str) -> dict | None:
+        key = type_map.normalize(label)
+        for candidate in flat:
+            if type_map.normalize(candidate["label"]) == key:
+                return candidate
+        return None
 
     for raw in terms:
         term = str(raw or "").strip()
         if not term:
             continue
-        key = term.replace(" ", "").lower()
 
-        def normalize(text: str) -> str:
-            return text.replace(" ", "").lower()
-
-        exact = [c for c in flat if normalize(c["label"]) == key]
-        contains = [c for c in flat
-                    if c not in exact
-                    and len(normalize(c["label"])) >= 2
-                    and (normalize(c["label"]) in key or key in normalize(c["label"]))]
-        overlap = []
-        if exact or contains:
-            overlap = []
-        else:
-            for candidate in flat:
-                piece = _common_chars(key, normalize(candidate["label"]))
-                if len(piece) >= 2:
-                    overlap.append({**candidate, "_piece": piece})
-            overlap.sort(key=lambda c: -len(c["_piece"]))
-
-        if exact:
-            best, match, pool = exact[0], "exact", exact
-        elif contains:
-            best, match, pool = contains[0], "contains", contains
-        elif overlap:
-            best = {k: v for k, v in overlap[0].items() if k != "_piece"}
-            match, pool = "overlap", [{k: v for k, v in c.items() if k != "_piece"} for c in overlap]
-        else:
-            results.append({"term": term, "kind": "keyword", "match": "none",
-                            "matched": None, "candidates": []})
+        # 路径 1：平台自己就叫这个名字（最强、且不需要任何外部知识）
+        best = find_label(term)
+        if best is not None:
+            results.append({
+                "term": term, "kind": "industry", "match": "exact",
+                "relation": "exact", "score": type_map.relation_score("exact"),
+                "matched": best, "candidates": [best],
+                "reason": "与平台行业名完全相同", "evidence": "",
+            })
             continue
 
-        results.append({"term": term, "kind": "industry", "match": match,
-                        "matched": best, "candidates": pool[:5]})
+        # 路径 2：映射表
+        row = type_map.lookup(term)
+        if row is None:
+            results.append({
+                "term": term, "kind": "keyword", "match": "no_path",
+                "relation": "none", "score": 0.0,
+                "matched": None, "candidates": [],
+                "reason": "既不是平台正式行业名，映射表里也没有这一行 —— "
+                          "没有可解释的路径，按笔记关键词搜。",
+                "evidence": "",
+            })
+            continue
+
+        if row["decision"] == "map":
+            target = find_label(row.get("platform_label") or "")
+            if target is not None:
+                results.append({
+                    "term": term, "kind": "industry", "match": "map",
+                    "relation": row["relation"],
+                    "score": type_map.relation_score(row["relation"]),
+                    "matched": target, "candidates": [target],
+                    "reason": row.get("reason", ""), "evidence": row.get("evidence", ""),
+                })
+                continue
+            # 表里指向的平台实体现在解析不出来（平台改版 / 快照过期）⇒ 降级，
+            # **绝不硬塞一个可能已经失效的 ID**。
+            results.append({
+                "term": term, "kind": "keyword", "match": "refused",
+                "relation": row["relation"], "score": 0.0,
+                "matched": None, "candidates": [],
+                "reason": f"映射表指向平台实体「{row.get('platform_label')}」，"
+                          f"但它不在当前行业清单里（平台改版或快照过期）—— 本次不映射。",
+                "evidence": row.get("evidence", ""),
+            })
+            continue
+
+        # refuse（拒绝映射）/ pending（路径合理但通道未接通）
+        results.append({
+            "term": term, "kind": "keyword",
+            "match": "refused" if row["decision"] == "refuse" else "pending",
+            "relation": row["relation"],
+            "score": type_map.relation_score(row["relation"]),
+            "matched": None, "candidates": [],
+            "reason": row.get("reason", ""), "evidence": row.get("evidence", ""),
+            "platform_label": row.get("platform_label", ""),
+            "platform_path": row.get("platform_path", ""),
+        })
 
     return results, source
 
@@ -282,23 +331,70 @@ def _report_page(page_num: int, collected: int, total: int, counts: dict) -> Non
 
 
 def search(params: SearchParams, *, per_tier: int = 20,
-           start_page: int = 1,
+           start_pages: dict | None = None,
            keywords: list[str] | None = None) -> tuple[list[dict], dict]:
     """检索并映射成交付行 —— **每个量级各取 `per_tier` 条**。
 
-    **本地两道把关**（平台的粉丝量筛选参数尚未破译，见 `search.py`）：
+    ## 为什么改成「按档位逐个问平台」（2026-10-13，findings F-40）
 
-    1. **粉丝档位**：只收 1w ≤ fans < 50w 的（KOC 与 >50w 档没有对应报价行）；
+    原来是**拉回一整页（什么粉丝量的人都有）再在本地剔**。平台的排序是
+    `comprehensiverank`，高量级的达人在这个序里本来就稀疏 ⇒ 超头部那几档
+    **永远靠碰运气**：实测 40w-50w 只收到 3 条、30w-40w 7 条、20w-30w 9 条，
+    而用户的要求是**每档必 20，硬性**。
+
+    现在把粉丝量区间**发给平台**（`fansNumberLower`/`fansNumberUpper`，F-40 实测：
+    40w-50w 这一档单独就有 **2150** 人），于是每一档变成"在一个**稠密**的池子里取 20 条"——
+    档位不再需要靠碰。
+
+    **顺序：档位在外、关键词在内。** 一档凑满 20 就换下一档；关键词一个个试，
+    试到要么凑满、要么这个词在这一档里翻到底。
+
+    ## 本地两道把关仍然保留
+
+    1. **粉丝档位**：只收 1w ≤ fans < 50w 的；
     2. **预算**：按「对应档位基准价 × 倍数」算上限，图文/视频任一在预算内即通过。
 
-    两道都在**翻页时**判，而不是取完再滤 —— 否则剔掉的人会让名额不够，只能交出短名单。
+    平台侧的区间现在**已经替我们挡掉大部分**，本地这两道变成兜底 ——
+    但**必须留着**：万一哪天平台又把这个参数悄悄忽略掉（F-40 里另外四种写法就是
+    被静默忽略的），本地把关还在，交出去的名单就不会错。
 
-    按量级分配名额的理由见 `search_all` 的文档；高量级凑不满时**如实交少**并报数。
+    ## 兜底：检索词凑不满的档位，**不带检索词**再翻一遍
+
+    某一档把检索词全跑完仍不够 `per_tier` 时，就丢开检索词、按那一档的粉丝区间
+    再问一次平台（实测那一档整档的人远多于"命中检索词"的几十人）。
+    ⚠️ **代价：兜底收进来的人不保证命中检索词** —— 用户 2026-10-13 拍板接受
+    （口径是"每个量级必凑满"优先）。哪几档补了、各补几条，记在
+    `stats["keyword_fallback"]` 与运行日志里。
+
+    ## 游标：按「档位 × 关键词」记，续到底会自动回到第 1 页
+
+    `start_pages` / `stats["next_pages"]` 的键都是 `combo_key(tier, keyword)` ——
+    同一档里不同关键词是不同结果集，页码不能互相挪用；兜底那趟（不带检索词）
+    更是独立的池子。`None` 表示从头开始。
+
+    ⚠️ **续到空页会自动回落到第 1 页**：接着上次的位置问、平台一个人都不给，
+    说明那个池子已经翻到底了。这时若直接返回空名单，用户看到的是"点了一次却什么都没出"，
+    而他并不知道原因（第 1 页那批人他还想再看一轮）。回落是个显式的一次性动作，
+    日志里记一行。
     """
     # 把关规则来自**唯一实现** `build_gate()` —— 检索链路与样例生成脚本共用同一份，
     # 不允许各自写一套（曾经因此漏掉预算那道，交付表混进了两个都超的达人）。
     keep, drops = build_gate()
     labels = tier_labels()
+    tiers = {f"{label}({bracket})": (low, high)
+             for low, high, label, bracket in TIERS}
+
+    def start_for(combo: str) -> int:
+        """这一格（档位 × 关键词）这次从第几页开始；没有游标就是第 1 页。
+
+        ⚠️ 键是**组合**不是档位（`combo_key()`）：同一档里不同关键词是不同结果集，
+        页码不能互相挪用；兜底那一趟更是一个独立的池子。
+        """
+        cursors = start_pages or {}
+        try:
+            return max(1, int(cursors.get(combo) or 1))
+        except (TypeError, ValueError):
+            return 1
 
     def key_of(item: dict) -> str:
         index = tier_index(item.get("fansNum"))
@@ -309,82 +405,161 @@ def search(params: SearchParams, *, per_tier: int = 20,
     # 收出好几倍的量；而且同一个人命中多个关键词时会被重复计入，
     # 变相等于"命中多个提高了优先级"（用户明确说过不该这样）。
     todo = [k.strip() for k in (keywords or []) if k and k.strip()] or [""]
+    #: 这次有没有真的给检索词。**没有检索词时 todo 就是 `[""]`**，
+    #: 那一趟本身就是"不带 keyword 的普通检索" ⇒ 不该再兜底一次（否则同一件事问两遍）。
+    with_terms = todo != [""]
 
     counts: dict = {}
     seen: set = set()
     raw: list[dict] = []
     pages_read = 0
-    max_read = 0
-    cut_by_limit = False       # 有关键词是被页数上限**截断**的 ⇒ 后面还有没取到的
-    ran_all = False            # 是不是每个关键词都轮到过
+    cut_by_limit = False
     cut_count = 0
-    exhausted_count = 0
-    per_keyword_pages: dict[str, int] = {}
+    per_combo_pages: dict[str, int] = {}
+    next_pages: dict[str, int] = {}
+    starts: dict[str, int] = {}          # 每一格这次实际从第几页开始（报给界面看）
+    tier_cut: dict[str, bool] = {key: False for key in labels}
+    tier_queries: dict[str, int] = {key: 0 for key in labels}
+    tier_exhausted: dict[str, int] = {key: 0 for key in labels}
     budget = PAGES_PER_RUN
     total = 0
 
     def satisfied() -> bool:
         return all(counts.get(k, 0) >= per_tier for k in labels)
 
+    #: 哪些档位动用了「不带检索词」的兜底，各补进来几条（进 stats，供事后核查）。
+    fallback_gained: dict[str, int] = {}
+
     def inner(page):
-        nonlocal pages_read, max_read, cut_by_limit, ran_all, cut_count
-        nonlocal exhausted_count, budget, total
-        ran = 0
-        for keyword in todo:
-            if budget <= 0 or satisfied():
-                break
-            cap = min(PAGES_PER_KEYWORD, budget)
-            one = replace(params, keyword=keyword)
-            base = pages_read
+        nonlocal pages_read, cut_by_limit, cut_count, budget, total
 
-            def on_page(page_num, _collected, page_total, tier_counts, _base=base):
-                _report_page(_base + page_num, len(seen), page_total, tier_counts)
+        def run_combo(tier_key: str, keyword: str) -> int:
+            """跑一个「档位 × 关键词」组合，返回这一档**新增**了几条。"""
+            nonlocal pages_read, cut_by_limit, cut_count, budget, total
+            combo = combo_key(tier_key, keyword)
+            before = counts.get(tier_key, 0)
+            tier_queries[tier_key] += 1
 
-            items, st = search_all(
-                page, one, per_tier=per_tier, key_of=key_of, tier_keys=labels,
-                throttle=throttle.default, keep=keep, on_page=on_page,
-                start_page=start_page, max_pages=cap,
-                counts=counts, seen=seen)
-            raw.extend(items)
-            read = int(st.get("pages") or 0)
-            per_keyword_pages[keyword or "（不限）"] = read
-            pages_read += read
-            budget -= read
-            max_read = max(max_read, read)
-            total = st.get("total") or total
-            ran += 1
+            def one_pass(start_page: int):
+                """从 `start_page` 起翻一趟；返回 `(搜索统计, 本次翻了几页, 本次页数上限)`。"""
+                nonlocal pages_read, cut_by_limit, cut_count, budget, total
+                low, high = tiers[tier_key]
+                cap = min(PAGES_PER_KEYWORD, budget)
+                # 带上这一档的粉丝区间 —— 这就是"按档位问平台"的全部内容。
+                one = replace(params, keyword=keyword, fans_lower=low, fans_upper=high)
+                base = pages_read
+
+                def on_page(page_num, _collected, page_total, tier_counts, _base=base):
+                    _report_page(_base + page_num, len(seen), page_total, tier_counts)
+
+                items, st = search_all(
+                    page, one, per_tier=per_tier, key_of=key_of, tier_keys=[tier_key],
+                    throttle=throttle.default, keep=keep, on_page=on_page,
+                    start_page=start_page, max_pages=cap,
+                    counts=counts, seen=seen, stall_pages=3)
+                raw.extend(items)
+                read = int(st.get("pages") or 0)
+                pages_read += read
+                budget -= read
+                total = st.get("total") or total
+                return st, read, cap
+
+            start = start_for(combo)
+            starts[combo] = start
+            st, read, cap = one_pass(start)
+            if read == 0 and start > 1:
+                # 接着上次的位置问，**一个人都没有** ⇒ 上一批已经翻到底了。
+                # 这时**自动回到第 1 页**：否则用户点一次「开始检索」会拿到一份空名单，
+                # 而他并不知道这是"续到底"造成的（平台第 1 页那批人他其实还没看过第二轮）。
+                log.info("「%s」接着第 %s 页往下已经没人了 ⇒ 这一格回到第 1 页重来", combo, start)
+                st, read, cap = one_pass(1)
+
+            per_combo_pages[combo] = read
+            next_pages[combo] = int(st.get("next_page") or 1)
             if st.get("reached_end"):
-                exhausted_count += 1
+                tier_exhausted[tier_key] += 1
             elif read >= cap:
-                # 这个词是被上限截断的，不是"平台没有更多了" —— 别报成到底
+                # 这一格是被页数上限截断的 ⇒ 后面还有没取到的
                 cut_by_limit = True
+                tier_cut[tier_key] = True
                 cut_count += 1
-        ran_all = ran == len(todo)
+            return counts.get(tier_key, 0) - before
+
+        for tier_key in labels:
+            if budget <= 0:
+                break
+            for keyword in todo:
+                if budget <= 0 or counts.get(tier_key, 0) >= per_tier:
+                    break
+                run_combo(tier_key, keyword)
+
+            # ── 兜底：检索词在这一档里**全跑完了还是不够** ⇒ 不带检索词再翻这一档 ──
+            #
+            # 为什么必须兜底（2026-10-13 实测）：**"整档的人"远多于"命中检索词的人"**。
+            # 40w-50w 不带检索词时整档 2150 人（F-40），可一挂上检索词就只剩几十
+            # （实测：'体验' 15 人、'活人感' 0 人、另有一个词 34 人）——
+            # 再怎么翻也到不了 30，界面就一直报"这一档没凑满"。
+            #
+            # ⚠️ **代价必须记住：兜底收进来的人不保证命中检索词。**
+            # 这是用户 2026-10-13 拍板接受的取舍 —— 「每个量级必凑满」优先于
+            # 「只收命中检索词的人」。所以这件事**必须留痕**：进 stats.keyword_fallback
+            # 与运行日志，交出去的名单事后查得出来哪几条是补的（CLAUDE.md 第九条）。
+            if with_terms and budget > 0 and counts.get(tier_key, 0) < per_tier:
+                before = counts.get(tier_key, 0)
+                log.info("档位 %s：检索词全跑完只有 %s 条（目标 %s），不带检索词再翻这一档…",
+                         tier_key, before, per_tier)
+                got = run_combo(tier_key, "")
+                if got:
+                    fallback_gained[tier_key] = got
+                    log.warning("档位 %s 补进 %s 条**不带检索词**的结果"
+                                "（这些人不保证命中检索词；见 stats.keyword_fallback）",
+                                tier_key, got)
         return None
 
-    progress.begin(progress.SEARCH, "正在翻页检索（浏览器窗口不会自己动，属正常）…")
+    progress.begin(progress.SEARCH, "正在按量级逐档检索（浏览器窗口不会自己动，属正常）…")
     pgy_session.run_with_page(inner)
+
+    def tier_done(tier_key: str) -> bool:
+        """这一档是不是**平台那边真的没更多人了**。
+
+        ⚠️ **"凑满 20"不算到头**（第一版就是这么写错的）：凑满只是我们**主动停手**，
+        平台的池子还厚得很（40w-50w 单档 2150 人，这一轮只翻了第 1 页）。
+        要是把"凑满"当成到头，界面就会**把「换一批」置灰** —— 用户再想换一批人
+        就没路了。判据只能是"这一档问过的每个关键词都翻到了底、且都没被页数截断"。
+        """
+        if not tier_queries[tier_key]:
+            return False
+        return (not tier_cut[tier_key]
+                and tier_exhausted[tier_key] >= tier_queries[tier_key])
 
     stats = {
         "pages": pages_read,
         "page_limit": PAGES_PER_RUN,
-        "start_page": start_page,
-        # 换一批的落点：每个关键词都从同一个起点往后翻同样的页数，
-        # 所以取"各关键词里翻得最多的那个"作为统一的下次起点。
-        "next_page": start_page + (PAGES_PER_KEYWORD if cut_by_limit else max_read),
-        # ⚠️ `reached_end` 必须是**可信的**：只有"每个关键词都轮到过、且都没有被上限截断、
-        # 且都翻到了底"才算到底。原来写的是 `or`（一个关键词到底就报"全到底了"）——
-        # 实测直接把自己骗了：7 个词里有 6 个是被 8 页上限截断的，界面却显示"平台到底了"。
-        "reached_end": ran_all and not cut_by_limit and exhausted_count == len(todo),
+        # 游标与每格翻页数都按「档位 × 关键词」记（`combo_key()`）。界面要的
+        # "本批从第几页开始 / 下一批从第几页继续"是两个代表值（取最小的那个）。
+        "start_page": min(starts.values()) if starts else 1,
+        "start_pages": dict(starts),
+        # 没轮到的那几格（预算先耗尽了）**不进 next_pages** —— 它们本来就没被翻过，
+        # 下次自然从第 1 页开始，这是对的（旧版硬塞一个起点反而会漏看最前面的人）。
+        "next_pages": dict(next_pages),
+        "next_page": min(next_pages.values()) if next_pages else 1,
+        # ⚠️ `reached_end` 必须是**可信的**：只有"每一档要么凑满、要么真翻到底"才算到底。
+        # 报错的代价是用户以为没救了（或反过来白翻一堆），所以宁可保守。
+        "reached_end": all(tier_done(key) for key in labels),
         "stopped_by_page_limit": cut_by_limit or budget <= 0,
         "keywords_cut_by_limit": cut_count,
-        "keywords_exhausted": exhausted_count,
+        # 高量级本来就少：凑不满的档位如实报出来，别装作没事。
+        "tiers_short": {key: counts.get(key, 0) for key in labels
+                        if counts.get(key, 0) < per_tier},
         "total": total,
         "per_tier_target": per_tier,
         "per_tier_counts": {key: counts.get(key, 0) for key in labels},
         "exhausted": not satisfied(),
         "keywords": [k for k in todo if k],
-        "pages_per_keyword": per_keyword_pages,
+        "pages_per_keyword": per_combo_pages,
+        # 哪些档位动用了「不带检索词」的兜底、各补进来几条。**这份名单必须有据可查**：
+        # 那些人不保证命中检索词，事后要能说清名单里哪几条是补的（CLAUDE.md 第九条）。
+        "keyword_fallback": fallback_gained,
     }
     # 排序规则见 `mapper.sort_rows()`（量级 → 符合度 → 图文报价 → 粉丝数）。
     # ⚠️ **匹配度（matchNoteNumber）不参与排序** —— 用户明确：命中多少个关键词
@@ -393,7 +568,6 @@ def search(params: SearchParams, *, per_tier: int = 20,
     stats["mapped"] = len(rows)
     stats["kept"] = len(rows)
     stats["dropped"] = {"out_of_range": drops["out_of_range"],
-                        "no_median": drops["no_median"],
                         "over_budget": drops["over_budget"]}
     if pricing.load() is None:
         stats["pricing"] = "未配置（预算把关已关闭）"
@@ -405,9 +579,6 @@ def search(params: SearchParams, *, per_tier: int = 20,
              stats["mapped"], stats["pages"], stats["per_tier_counts"], short or "无")
     if drops["samples"]:
         log.info("超预算样例：%s", " | ".join(drops["samples"]))
-    if drops["no_median"]:
-        log.info("因中位数为 0／缺失而剔除 %s 条；样例：%s",
-                 drops["no_median"], " | ".join(drops["median_samples"]))
     stats["per_tier_short"] = short
     return rows, stats
 
@@ -416,27 +587,36 @@ def search_batch(params: SearchParams, *, per_tier: int = 20, mode: str = "fresh
                  keywords: list[str] | None = None) -> tuple[list[dict], dict]:
     """按「从头取」或「换一批」取一次名单，并推进游标。
 
-    - `mode="fresh"`：从第 1 页开始 —— 同一组条件会得到**同一批人**（排序是平台写死的）；
-       同时把游标重置到 `stats["next_page"]`。
-    - `mode="next"`：接着该条件**上次翻到的位置**往下取，拿到的是没看过的新人。
+    - `mode="next"`（**界面上「开始检索」现在走的就是它**）：接着该条件
+      **上次翻到的位置**往下取，拿到的是没看过的新人。没有游标时＝从第 1 页开始，
+      所以第一次跑与 `fresh` 完全一样。
+    - `mode="fresh"`：**显式**从第 1 页起 —— 同一组条件必然给**同一批人**
+      （排序是平台写死的）。界面上的「从头开始」走这条。
 
-    游标按「筛选条件 + 关键词」分别记（见 `selection_cursor`），
-    换了行业或换了关键词就自动从头来 —— 否则会拿"母婴的第 7 页"去翻"美妆的第 7 页"，
-    或者拿"A 关键词的第 7 页"去当"B 关键词的第 7 页"。
+    为什么把 `next` 设成默认（用户 2026-10-13 拍板）：平排序写死 ⇒ 每次都从头取
+    等于每次发同一批人，池子里剩下的**永远不可知**；而"换一批"本来就是为这件事做的，
+    只是以前要人手点一下。
+
+    游标按「筛选条件 + 检索词」分文件键、再按**「档位 × 关键词」**分格记
+    （见 `selection_cursor` 与 `combo_key`）—— 换了行业/检索词就从新的键开始，
+    拿"母婴的第 7 页"去翻"美妆的第 7 页"、或把兜底那趟的页码串给关键词那趟，
+    都会取回莫名其妙的人。
     """
     from backend.services import selection_cursor
 
     signature = "，".join(k.strip() for k in (keywords or []) if k and k.strip())
-    start_page = 1
+    start_pages: dict = {}
     if mode == "next":
-        start_page = selection_cursor.load(params.first_industry, params.second_industry,
-                                          signature)
-        log.info("换一批：从第 %s 页接着翻（一级行业=%r，关键词=%r）",
-                 start_page, params.first_industry, signature)
+        start_pages = selection_cursor.load(params.first_industry, params.second_industry,
+                                           signature)
+        log.info("接着上次的位置往下翻（一级行业=%r，关键词=%r，各格起点=%s）",
+                 params.first_industry, signature, start_pages or "从头")
 
-    rows, stats = search(params, per_tier=per_tier, start_page=start_page, keywords=keywords)
+    rows, stats = search(params, per_tier=per_tier, start_pages=start_pages,
+                         keywords=keywords)
+    # 写回游标：键是「档位 × 关键词」，与读进来时同一套（见 `combo_key`）。
     selection_cursor.save(params.first_industry, params.second_industry,
-                          stats.get("next_page", start_page + 1), signature)
+                          stats.get("next_pages") or {}, signature)
     return rows, stats
 
 
@@ -486,6 +666,16 @@ def apply_terms(params: SearchParams, terms: list[str] | None) -> tuple[SearchPa
                         [i["term"] for i in industries])
     else:
         keywords = [i["term"] for i in items]
+
+    # 判断明细**必须留痕**：界面不摆这些（F-37 定的"隐性"），所以日志是唯一的出口。
+    # 哪天名单看着不对，先来这里看它当时把哪个词当成了什么、为什么。
+    for item in items:
+        if item["kind"] == "keyword" and item["match"] != "no_path":
+            log.info("检索词 %r 未映射到平台实体（%s）：%s",
+                     item["term"], item["match"], item.get("reason", ""))
+    unmapped = [i["term"] for i in items if i["kind"] == "keyword"]
+    if unmapped:
+        log.info("按笔记关键词搜的词：%s（判断明细见 stats.classified_terms）", unmapped)
 
     return replace(params, keyword=""), keywords, items
 

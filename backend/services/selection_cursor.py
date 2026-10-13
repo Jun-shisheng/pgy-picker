@@ -7,8 +7,10 @@
 **它怎么解决**：记住每个量级上次取到第几页，下次从那里接着往下翻。代价很小，
 但拿到的是**真正没看过的新人**（不像本地打乱顺序那种假变化）。
 
-**按筛选条件分别记游标**：换了一级/二级行业就是另一个结果集，页码对不上，
-必须从头来 —— 否则会拿着"母婴的第 7 页"去翻"美妆的第 7 页"，取回来一堆莫名其妙的人。
+**两级键**：外层按「筛选条件 + 检索词」分文件键，内层按**「档位 × 关键词」**分格
+（内层键由调用方 `selection_service.combo_key()` 生成，本模块只当它是字符串）。
+两者都不能省：换了行业/检索词就是另一个结果集；同一档里不同关键词、以及
+兜底那趟（不带检索词）也都是**不同的池子**，页码互相挪用就会取回一堆莫名其妙的人。
 
 ⚠️ 落在 `ROOT` 下，与 `settings.json` 同级，所以**必须在 `.gitignore` 里**。
 """
@@ -52,23 +54,46 @@ def _read_all() -> dict:
     return pages if isinstance(pages, dict) else {}
 
 
-def load(first_industry: str, second_industry: str, keywords: str = "") -> int:
-    """下次该从第几页开始。没有记录就是 1（从头来）。"""
+def load(first_industry: str, second_industry: str, keywords: str = "") -> dict[str, int]:
+    """下次每一格该从第几页开始，形如 `{"超头部KOL(40w-50w) × 体验": 3, ...}`；没有就是 `{}`。
+
+    ⚠️ **键是「档位 × 关键词」**（2026-10-13 起）：档位是独立的粉丝区间查询，
+    同一档里不同关键词又是不同结果集 —— "A 格的第 7 页"对 B 格毫无意义。
+
+    旧版文件兼容情况：值可能是**一个整数**（最早，所有档位共用一个页码）或
+    **档位名做键的字典**（次早）。两种情况读出来都不报错，只是键与新的组合键
+    **匹配不上** ⇒ 那几格从第 1 页开始；因为 `next` 已是默认模式、且续到空页会自动
+    回落第 1 页，升级不会让人卡住。
+    """
     value = _read_all().get(key_for(first_industry, second_industry, keywords))
+    if isinstance(value, dict):
+        out: dict[str, int] = {}
+        for key, raw in value.items():
+            try:
+                out[str(key)] = max(1, int(raw))
+            except (TypeError, ValueError):
+                continue
+        return out
     try:
-        page = int(value)
+        return {"*": max(1, int(value))}      # 旧版：一个页码管所有档位
     except (TypeError, ValueError):
-        return 1
-    return max(1, page)
+        return {}
 
 
-def save(first_industry: str, second_industry: str, next_page: int,
+def save(first_industry: str, second_industry: str, next_pages: dict,
          keywords: str = "") -> None:
-    """记下"下次从这一页开始"。写不进去只记日志 —— 游标丢了只是下次从头来，不该让检索失败。"""
+    """记下"每个档位下次从第几页开始"。写不进去只记日志
+    —— 游标丢了只是下次从头来，不该让检索失败。"""
     pages = _read_all()
-    pages[key_for(first_industry, second_industry, keywords)] = max(1, int(next_page))
+    clean: dict[str, int] = {}
+    for key, value in (next_pages or {}).items():
+        try:
+            clean[str(key)] = max(1, int(value))
+        except (TypeError, ValueError):
+            continue
+    pages[key_for(first_industry, second_industry, keywords)] = clean
     try:
-        _atomic_write(CURSOR_FILE, json.dumps({"version": 1, "pages": pages},
+        _atomic_write(CURSOR_FILE, json.dumps({"version": 2, "pages": pages},
                                               ensure_ascii=False, indent=2))
     except OSError:
         log.warning("写游标失败（不影响本次结果）：%s", CURSOR_FILE, exc_info=True)

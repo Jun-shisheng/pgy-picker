@@ -26,6 +26,9 @@ PROFILE_DIR = ROOT / "profiles" / "pugongying"
 PGY_HOME = "https://pgy.xiaohongshu.com/"
 KOL_PAGE = "https://pgy.xiaohongshu.com/solar/pre-trade/note/kol"
 USER_INFO_PATH = "/api/solar/user/info"
+#: 旧版本读小红书主页时用过的域名。**2026-11-23 起不再访问**；
+#: 这里只用于清理历史残留页签，不代表还会发请求。
+XHS_HOST = "www.xiaohongshu.com"
 
 
 class BrowserSessionError(RuntimeError):
@@ -119,11 +122,12 @@ OUR_HOST = "pgy.xiaohongshu.com"
 
 
 def _sweep_extra_pages(context) -> int:
-    """清掉自动化留下的多余页签，只留一个，返回关掉了几个。
+    """清掉自动化留下的多余页签，返回关掉了几个。
 
     为什么必须做：以前每跑一次就 `new_page()` 且从不回收，跑几次就堆出十几个
     标签页（用户实测反馈）。这里做的是**固定的"查完销毁"**：开工前先收干净，
-    只复用同一个页签，而不是无限开新的。
+    只复用同一个蒲公英页签；**旧版本残留的小红书页签也一并关掉**
+    （2026-11-23 起不再访问小红书，这里只做清理）。
 
     **只关本工具自己域名下的页签** —— 专属配置里理论上都是我们的，但按域名收窄
     是更稳的写法，将来万一混进别的东西也不会误关。
@@ -131,24 +135,89 @@ def _sweep_extra_pages(context) -> int:
     ours = []
     for candidate in context.pages:
         try:
-            if OUR_HOST in (candidate.url or ""):
+            url = candidate.url or ""
+            if OUR_HOST in url or XHS_HOST in url:
                 ours.append(candidate)
         except Exception:
             continue
+    keep = next((p for p in ours if OUR_HOST in (p.url or "")), None)
     closed = 0
-    for stale in ours[1:]:
+    for stale in ours:
+        if stale is keep:
+            continue
         try:
             stale.close()
             closed += 1
         except Exception:
             pass
     if closed:
-        log.info("已清理上一轮残留的 %s 个页签（只保留 1 个复用）", closed)
+        log.info("已清理上一轮残留的 %s 个页签（蒲公英只保留 1 个复用）", closed)
     return closed
 
 
+#: 网络类错误——用户读得懂、也知道该去查什么。Playwright 的原始报错全是英文
+#: 的 `net::ERR_*`，直接丢给界面等于没说。
+_NETWORK_ERROR_HINTS = {
+    "ERR_NAME_NOT_RESOLVED": "域名解析失败（DNS）",
+    "ERR_CONNECTION_REFUSED": "连接被拒绝",
+    "ERR_CONNECTION_TIMED_OUT": "连接超时",
+    "ERR_TIMED_OUT": "连接超时",
+    "ERR_PROXY_CONNECTION_FAILED": "代理连接失败",
+    "ERR_TUNNEL_CONNECTION_FAILED": "代理隧道连接失败",
+    "ERR_INTERNET_DISCONNECTED": "网络已断开",
+    "ERR_ADDRESS_UNREACHABLE": "地址不可达",
+    "ERR_SSL_PROTOCOL_ERROR": "SSL 握手失败",
+}
+
+
+def _network_message(exc: Exception) -> str:
+    text = str(exc)
+    for code, hint in _NETWORK_ERROR_HINTS.items():
+        if code in text:
+            return (f"浏览器打不开蒲公英（{hint}）。如果默认浏览器能打开，"
+                    f"请检查那个自动化浏览器是否走了同一个代理/VPN，"
+                    f"或稍等网络恢复后重试。")
+    return (f"浏览器打开蒲公英失败：{text.splitlines()[0][:200]}。"
+            f"请确认那个浏览器窗口能正常打开网站后重试。")
+
+
+def _goto(page, url: str, *, timeout: int = 60_000, attempts: int = 2) -> None:
+    """打开页面并等 DOM 就绪。**网络/代理问题要抛可读错误**，不能静默吞掉。
+
+    每次只重试一次：Edge 冷启动时偶发的 `ERR_ABORTED` 多半是重定向竞态，
+    重试一次就够；真正的断网/代理问题重试十次也没用，只会让用户干等。
+    """
+    last: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+            return
+        except Exception as exc:
+            last = exc
+            text = str(exc)
+            if "interrupted by another navigation" in text:
+                # 平台自己跳到了别的 URL（例如登录后跳 /solar/...）——等它落定即可，
+                # 这不是失败。以前这里当成异常吞掉，随后 login_status 读到 0，
+                # 用户看到的是"读不到登录态"，真因却是导航竞态。
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                except Exception:
+                    pass
+                return
+            log.warning("打开 %s 失败（第 %s/%s 次）：%s", url, attempt, attempts,
+                        text.splitlines()[0][:200])
+            if attempt < attempts:
+                page.wait_for_timeout(1_200 * attempt)
+    raise BrowserSessionError(_network_message(last or RuntimeError("unknown")))
+
+
 def _ensure_inner(start_url: str) -> Session:
-    """在工作线程里建立/复用会话。"""
+    """在工作线程里建立/复用会话。
+
+    ⚠️ **复用已有页签时不再强制 `goto(start_url)`**：以前每次建会话都导航一次，
+    会和平台自己的登录后跳转撞车（`Navigation interrupted by another navigation`），
+    紧接着 `login_status` 读到 0，表现出来就是"自动登录有时候无法访问网站"。
+    """
     global _current
     existing = current()
     if existing is not None:
@@ -171,11 +240,29 @@ def _ensure_inner(start_url: str) -> Session:
     ours = [p for p in context.pages if OUR_HOST in (p.url or "")]
     page = ours[0] if ours else context.new_page()
 
-    page.set_viewport_size({"width": 1440, "height": 900})
-    try:
-        page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
-    except Exception as exc:
-        log.warning("打开 %s 未正常完成：%s", start_url, exc)
+    # ⚠️ **不要调 `page.set_viewport_size()`**（2026-11-10 修）：
+    # 那会在一个**可见的外部 Edge 窗口**上强行覆盖 CSS 视口尺寸。窗口被最大化、
+    # 或系统显示缩放不是 100% 时，页面只按固定 1440×900 排版，右侧就多出一块空白；
+    # 更糟的是点击坐标按被覆盖的视口换算，登录按钮可能点不中。
+    # 让页面跟随真实窗口尺寸即可。
+
+    if not (page.url or "").startswith(PGY_HOME.rstrip("/")):
+        _goto(page, start_url)
+    else:
+        # 已经在蒲公英：只等当前页面落定，**不要重新导航**（会打断登录后的跳转）。
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=15_000)
+        except Exception:
+            pass
+        # 上一轮可能停在 about:blank / chrome-error 的占位页上；URL 对但内容空
+        # 时补一次导航。`body` 没有文字基本就是没加载出来。
+        try:
+            body = page.evaluate("() => (document.body && document.body.innerText || '').trim()")
+        except Exception:
+            body = ""
+        if not body:
+            _goto(page, start_url)
+
     _current = Session(pw=pw, browser=browser, context=context, page=page, endpoint=endpoint)
     log.info("已建立蒲公英浏览器会话：%s（页签数 %s）",
              getattr(endpoint, "summary", endpoint), len(context.pages))
@@ -195,41 +282,60 @@ def ensure_session(*, start_url: str = PGY_HOME) -> Session:
 
 
 def _close_inner() -> None:
-    """收工：关掉我们自己的自动化页签，只留浏览器窗口本身。
+    """收工：**只丢掉内存里的会话对象，页签和浏览器一律不动**。
+
+    用户 2026-11-10 明确要求：「程序关闭后浏览器是正常的，不要关闭和退出」。
+    之前这里会 `page.close()` + `browser.close()`，客户端一关，自动化 Edge 和
+    登录态一起没了 —— 与 `CLAUDE.md` 第二条（关客户端只结束自动化接管）也不符。
+
+    现在：
+    - 不关页签（关最后一个页签会把窗口带走）；
+    - 不关浏览器（Edge 是独立进程，继续留着，登录态也留着）；
+    - 下次启动 `_ensure_inner` 会通过端点记录重连同一个浏览器；
+    - 需要人工收干净时用 `python build\\clean_tabs.py --apply`。
 
     ⚠️ **刻意不调 `pw.stop()`**：Playwright 的 sync 启动器每进程只能启一次
     （见 `_playwright()`），停了之后就再也起不来了。驱动的收尾交给
-    `shutdown_playwright()`，只在进程真要退出时调。
+    `shutdown_playwright()`，只在进程真要退出时调；它只停驱动，不关浏览器。
     """
     global _current
-    session, _current = _current, None
-    if session is None:
-        return
-    try:
-        # **关自己那个页签**（"查完销毁"）。这正是用户要的：不无限堆页签。
-        # 关掉最后一个页签会让浏览器窗口退出——那也没关系，下次开工
-        # `ensure_edge_endpoint` 会重新拉起，而且省得留一个空窗口在屏幕上。
-        if session.page is not None:
-            session.page.close()
-    except Exception:
-        pass
-    for closer in (getattr(session.browser, "close", None),):
-        try:
-            if closer:
-                closer()
-        except Exception:
-            pass
+    _current = None
 
 
 def close_session() -> None:
-    """收工：关掉自动化页签与连接，**不动用户自己的东西**。
+    """收工：**只释放内存里的会话对象，浏览器/页签/登录态都不动**。
 
-    注意与「关客户端不动浏览器」的关系：那条规矩说的是**不关用户的浏览器/页签**。
-    这里关的是本工具在**专属配置**里自己开的那个自动化页签，属于"查完销毁"，
-    两件事不冲突。
+    用户 2026-11-10 明确要求：程序关闭后浏览器保持正常打开，不要关闭和退出。
+    所以这里不再关页签、也不 `browser.close()`；下次启动会重连同一个浏览器。
     """
     with _lock:
         submit(_close_inner)
+
+
+def _prepare_for_exit_inner() -> None:
+    """退出前把自动化页从**小红书/验证页**切回蒲公英首页。
+
+    为什么要做：客户端关闭时如果页签正停在小红书主页/登录/验证页，
+    下一次打开浏览器的人可能看到一个半加载、转圈、点不动的页面。
+    切回 PGY 首页只动**我们自己的自动化页签**；浏览器窗口和登录态保持不动。
+    页面本身已经卡死时 goto 会超时，失败就忽略，不阻断退出。
+    """
+    session = _current
+    if session is None or session.page is None:
+        return
+    try:
+        url = session.page.url or ""
+        if XHS_HOST in url or "website-login" in url or "captcha" in url:
+            log.info("退出前把自动化页从 %s 切回蒲公英首页", url[:100])
+            session.page.goto(PGY_HOME, wait_until="domcontentloaded", timeout=3_000)
+    except Exception as exc:
+        log.info("退出前切换页面失败（忽略）：%s", str(exc).splitlines()[0][:120])
+
+
+def prepare_for_exit() -> None:
+    """给客户端退出路径用：先收拾自动化页，再停驱动（不关浏览器）。"""
+    with _lock:
+        submit(_prepare_for_exit_inner)
 
 
 def shutdown_playwright() -> None:
@@ -251,12 +357,47 @@ def shutdown_playwright() -> None:
         submit(inner)
 
 
+def _drop_current() -> None:
+    """只丢掉内存里的会话对象，**不关浏览器窗口**。
+
+    用于「页签/连接已经失效」的恢复路径：浏览器窗口可能还开着（用户没关），
+    只是上一轮的 CDP 连接对象已经不能用了。下次 `_ensure_inner` 会重新
+    `connect_over_cdp` 到同一个端点，或按需重新拉起浏览器。
+    """
+    global _current
+    with _lock:
+        _current = None
+
+
+def _is_closed_error(exc: BaseException) -> bool:
+    text = str(exc)
+    return ("Target page, context or browser has been closed" in text
+            or "TargetClosedError" in text
+            or "Browser has been closed" in text
+            or "Connection closed" in text)
+
+
 def run_with_page(fn, *args, start_url: str = PGY_HOME, **kwargs):
     """在工作线程里确保会话就绪，再执行 `fn(page, *args, **kwargs)`。
 
     **这是外部唯一允许接触 page 的入口** —— page 不能离开工作线程（见模块顶部说明）。
+
+    ⚠️ **页签/浏览器被关掉时自动重建并重试一次**（2026-11-10 修）：
+    客户端启动自动登录时，如果上一轮的浏览器窗口刚好被关掉/重启，Playwright 会抛
+    `TargetClosedError: Target page, context or browser has been closed`，
+    界面看到的就是一句莫名其妙的英文报错。浏览器操作全部只读，重放一次是安全的；
+    重试前只丢掉内存里的会话对象，**不关用户还开着的浏览器窗口**。
     """
     def inner():
         session = _ensure_inner(start_url)
         return fn(session.page, *args, **kwargs)
-    return submit(inner)
+
+    try:
+        return submit(inner)
+    except Exception as exc:
+        if not _is_closed_error(exc):
+            raise
+        log.warning("浏览器页签/连接已关闭，重建会话后重试一次：%s",
+                    str(exc).splitlines()[0][:160])
+        _drop_current()
+        return submit(inner)

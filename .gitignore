@@ -47,15 +47,42 @@ settings.json
 
 # 行业枚举本地快照（可再生：下次活取会覆盖；落在仓库根，别提交进去）
 industries-cache.json
+# 地域枚举本地快照（同上）
+areas-cache.json
 
 # 「换一批」的翻页游标
 selection-cursor.json
+
+# 主页近10篇点赞中位数的本地缓存（3 天过期，减少重复刷小红书主页）
+homepage-cache.json
+notes-cache.json
 # 报价配置：商业敏感，绝不入库（真实价格由使用者自行放置，
 # 仓库里只有 backend/providers/pugongying/pricing.example.json 这个无真实价格的样板）
 pricing.json
+# 打包时从 资料和说明/报价档位.json 复制进来、随 sidecar 打进安装包的默认档位。
+# 含真实价格，绝不入库。
+backend/providers/pugongying/pricing.default.json
 
 # 探针证据（含平台原始响应与截图，仅本机留存）
 docs/evidence/
+
+# ── build/ 下的探针/调试本地产物（含平台原始响应、达人 uid/昵称、本机桌面截图）──
+# 这些只是本机取证用的中间文件，和 docs/evidence/ 同性质：绝不入库。
+build/_*.json
+build/_*.png
+build/_*.bat
+build/_*.ps1
+build/*.lnk
+build/desktop-*.png
+build/taskbar-*.png
+build/shortcut-*.png
+build/exe-*.png
+# 生成图标用的母图与 `tauri icon` 预览目录（正式图标在 frontend/src-tauri/icons/）
+build/icon-hollow-master.png
+build/icon-hollow-preview/
+build/Pgy-*.ico
+# 一次性探针脚本（常带具体达人样本 uid，仅本机调试用；已入库的历史探针不受影响）
+build/probe_*.py
 
 # 客户材料与公司报价（商业敏感，绝不入库）
 资料和说明/

@@ -87,9 +87,19 @@ $pyinstallerArgs = @(
   # backend/app.py 里的选号相关模块是**函数内惰性导入**的，PyInstaller 的静态
   # 分析扫不到它们；不显式收进来，打出的 exe 一调选号就 ModuleNotFoundError。
   "--collect-submodules", "backend",
-  "--collect-all", "openpyxl",
-  (Join-Path $root "backend_sidecar.py")
+  "--collect-all", "openpyxl"
 )
+# 报价档位默认值：从开发期的 资料和说明/报价档位.json 复制一份（gitignore，含真实价格），
+# 随 sidecar 打进安装包。装机后第一次启动用它初始化 <数据目录>/pricing.json。
+$pricingDefault = Join-Path $root "backend\providers\pugongying\pricing.default.json"
+$pricingSource = Join-Path $root "资料和说明\报价档位.json"
+if (Test-Path -LiteralPath $pricingSource) {
+  Copy-Item -LiteralPath $pricingSource -Destination $pricingDefault -Force
+}
+if (Test-Path -LiteralPath $pricingDefault) {
+  $pyinstallerArgs += @("--add-data", "$pricingDefault;backend\providers\pugongying")
+}
+$pyinstallerArgs += (Join-Path $root "backend_sidecar.py")
 try {
   & python @pyinstallerArgs
   $pyinstallerExit = $LASTEXITCODE

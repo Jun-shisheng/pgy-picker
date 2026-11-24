@@ -21,15 +21,19 @@ from typing import Any
 IDLE = "idle"
 LOGIN = "login"
 SEARCH = "search"
+ENRICH = "enrich"
 EXPORT = "export"
 DONE = "done"
 ERROR = "error"
 
 # 给界面直接显示的中文标签（别让前端再维护一份映射）
+# ⚠️ 2026-11-23 起不再有「登录小红书」阶段：中位数改从蒲公英详情页取，
+# 整条采集链路只访问 `pgy.xiaohongshu.com`（见 `findings.md` F-60）。
 STAGE_LABELS = {
     IDLE: "空闲",
     LOGIN: "登录平台",
     SEARCH: "检索达人",
+    ENRICH: "补充笔记数据",
     EXPORT: "生成 Excel",
     DONE: "已完成",
     ERROR: "已中断",
@@ -49,6 +53,8 @@ def _reset(keep_started: bool = False) -> None:
     _state.update({
         "stage": IDLE, "label": STAGE_LABELS[IDLE], "detail": "",
         "page": 0, "collected": 0, "total": 0, "per_tier_counts": {},
+        # 「补充主页数据」阶段：已补 / 共多少 / 当前达人。
+        "enriched": 0, "enrich_total": 0, "current": "",
         "started_at": started, "updated_at": _now(),
         "active": False, "error": "",
         # 失败时用来回答「停在哪一步」——否则 stage 一变成 error，这个信息就没了

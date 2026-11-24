@@ -78,6 +78,9 @@ def test_installer_hook_protects_the_same_folder():
     pricing_name = pricing.CONFIG_CANDIDATES[0].name
     assert f"Pgy\\{pricing_name}" in text, (
         f"安装脚本里没有 `Pgy\\{pricing_name}`：用户放的报价档位表会被装包删掉")
+    # 翻页游标与笔记缓存：丢了游标 → 两次「开始检索」可能拿到同一批人。
+    for name in ("selection-cursor.json", "notes-cache.json"):
+        assert f"Pgy\{name}" in text, f"安装脚本没保留 {name}，升级后会从第 1 页重来"
     assert "PGY_STASH_USER_FILES" in text and "PGY_RESTORE_USER_FILES" in text
     # 保留动作必须同时出现在安装与卸载两条路径上
     assert text.count("!insertmacro PGY_RESTORE_USER_FILES") == 2

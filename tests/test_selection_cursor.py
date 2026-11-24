@@ -12,9 +12,26 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from backend.providers.pugongying import search as search_mod
 from backend.providers.pugongying.search import SearchParams
 from backend.services import selection_cursor, selection_service
+
+
+class _NoWaitThrottle:
+    """测试里不要真的等 1.5–2.3 秒/页；只保留接口形状。"""
+
+    def __call__(self) -> None:
+        pass
+
+    def snapshot(self) -> dict:
+        return {"interval": 0.0, "calls": 0, "total_wait": 0.0}
+
+
+@pytest.fixture(autouse=True)
+def _no_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(selection_service.throttle, "default", _NoWaitThrottle())
 
 
 # ── 游标本身 ────────────────────────────────────────────────────────────────
@@ -142,7 +159,7 @@ def test_next_mode_uses_the_saved_cursor(monkeypatch):
     selection_cursor.save("母婴", "", {"超头部KOL(40w-50w)": 9})
     seen: dict = {}
 
-    def fake_search(params, *, per_tier, start_pages, keywords=None):
+    def fake_search(params, *, per_tier, start_pages, keywords=None, **kwargs):
         seen["start_pages"] = start_pages
         return [], {"next_pages": {"超头部KOL(40w-50w)": 11}, "per_tier_counts": {}}
 
@@ -159,7 +176,7 @@ def test_fresh_mode_ignores_the_cursor(monkeypatch):
     selection_cursor.save("母婴", "", {"超头部KOL(40w-50w)": 9})
     seen: dict = {}
 
-    def fake_search(params, *, per_tier, start_pages, keywords=None):
+    def fake_search(params, *, per_tier, start_pages, keywords=None, **kwargs):
         seen["start_pages"] = start_pages
         return [], {"next_pages": {"超头部KOL(40w-50w)": 2}, "per_tier_counts": {}}
 
@@ -187,7 +204,9 @@ def test_resuming_past_the_end_falls_back_to_page_one(monkeypatch):
             return {"data": {"kols": [], "total": 60}}
         prefix = f"{params.fans_lower}-{params.keyword}"
         return {"data": {"kols": [{"userId": f"{prefix}-{page_num}-{i}",
-                                   "fansNum": 420_000} for i in range(page_size)],
+                                   "fansNum": 420_000, "clickMidNum": 5000,
+                                   "interMidNum": 500}
+                                  for i in range(page_size)],
                          "total": 60}}
 
     monkeypatch.setattr(search_mod, "search_page", fake_search_page)
@@ -291,3 +310,50 @@ def test_api_honours_an_explicit_fresh(client, monkeypatch):
 
     assert client.post("/api/selection/run", json={"mode": "fresh"}).status_code == 200
     assert calls == ["fresh"]
+
+
+def test_first_run_without_cursor_can_pick_a_random_page(monkeypatch):
+    """没有游标时随机起点：两次「开始检索」不会必然给同一批人。"""
+    monkeypatch.setattr(selection_service, "SEARCH_RANDOM_PAGES", 3)
+    monkeypatch.setattr(selection_service.random, "randint", lambda _a, _b: 2)
+    starts: list[int] = []
+
+    def fake_search_all(page, params, **kwargs):
+        starts.append(int(kwargs["start_page"]))
+        return [], {"pages": 0, "next_page": 1, "reached_end": True,
+                    "total": 0, "per_tier_counts": {}}
+
+    monkeypatch.setattr(selection_service, "search_all", fake_search_all)
+    monkeypatch.setattr(selection_service.pgy_session, "run_with_page",
+                        lambda fn, *args, **kwargs: fn(None))
+
+    selection_service.search(SearchParams(), per_tier=1, keywords=["a"])
+    # 第一次问某一格时应该是随机页 2；随后可能因为“空页回落到第 1 页”再问一次 1。
+    assert starts and starts[0] == 2, starts
+    assert 2 in starts
+
+
+def test_cursor_signature_does_not_depend_on_keyword_order(monkeypatch):
+    """关键词顺序随机后，游标键仍按排序后的词算 —— 不能换序就丢游标。"""
+    seen: list[str] = []
+
+    def fake_load(_first, _second, signature):
+        seen.append(signature)
+        return {}
+
+    def fake_save(_first, _second, _pages, signature):
+        seen.append(signature)
+
+    def fake_search(params, **kwargs):
+        return [], {"next_pages": {}}
+
+    from backend.services import selection_cursor as cursor_mod
+    monkeypatch.setattr(cursor_mod, "load", fake_load)
+    monkeypatch.setattr(cursor_mod, "save", fake_save)
+    monkeypatch.setattr(selection_service, "search", fake_search)
+
+    selection_service.search_batch(SearchParams(), keywords=["b", "a"], mode="next")
+    selection_service.search_batch(SearchParams(), keywords=["a", "b"], mode="next")
+
+    assert seen, seen
+    assert set(seen) == {"a，b"}, seen

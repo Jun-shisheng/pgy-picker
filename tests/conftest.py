@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 
 from backend.services import (
+    area_cache,
     credential_service,
     industry_cache,
     progress,
@@ -61,7 +62,11 @@ def isolated_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     monkeypatch.setattr(credential_service, "_store", CredentialStore(fake))
     monkeypatch.setattr(credential_service, "SEED_FILE", tmp_path / "没有这个种子文件.txt")
     monkeypatch.setattr(industry_cache, "CACHE_FILE", tmp_path / "industries-cache.json")
+    monkeypatch.setattr(area_cache, "CACHE_FILE", tmp_path / "areas-cache.json")
     monkeypatch.setattr(selection_cursor, "CURSOR_FILE", tmp_path / "selection-cursor.json")
+    # 检索默认带随机（随机起始页 / 打乱关键词顺序）；测试必须可复现，固定成关闭。
+    monkeypatch.setattr(selection_service, "SEARCH_RANDOM_PAGES", 1)
+    monkeypatch.setattr(selection_service, "SHUFFLE_KEYWORDS", False)
     # 进度是**进程内全局**状态：不重置的话，上一个用例留下的 STAGE 会污染下一个。
     progress.reset()
     return {"backend": fake, "tmp": tmp_path}

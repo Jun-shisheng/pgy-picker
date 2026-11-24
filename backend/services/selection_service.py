@@ -10,6 +10,8 @@ Playwright 的 sync API 不能跨线程使用（详见 `session.py` 顶部说明
 from __future__ import annotations
 
 import logging
+import os
+import random
 import threading
 import time
 from contextlib import contextmanager
@@ -18,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 from backend.core.mio_core import ROOT
+from backend.providers.pugongying import enrich as pgy_enrich
 from backend.providers.pugongying import login as pgy_login
 from backend.providers.pugongying import pricing
 from backend.providers.pugongying import session as pgy_session
@@ -50,6 +53,22 @@ KOL_PAGE = "https://pgy.xiaohongshu.com/solar/pre-trade/note/kol"
 EXPORT_DIR = ROOT / "exports"
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(float(os.environ.get(name, "") or default))
+    except (TypeError, ValueError):
+        return default
+
+
+#: 没有游标时（首次运行 / 刚清库 / 升级丢了游标），每个「档位 × 关键词」
+#: 从 1..N 页里**随机**挑一个起点，避免两次「开始检索」给一模一样的名单。
+#: 设 1 关闭随机（永远从第 1 页）。
+SEARCH_RANDOM_PAGES = max(1, _env_int("PGY_SEARCH_RANDOM_PAGES", 3))
+#: 每次检索是否打乱关键词顺序（游标签名按**排序后**的词算，换顺序不会丢游标）。
+SHUFFLE_KEYWORDS = (os.environ.get("PGY_SEARCH_SHUFFLE_KEYWORDS", "1")
+                    .strip().lower() not in ("0", "false", "no", "off"))
+
+
 def combo_key(tier_key: str, keyword: str) -> str:
     """「档位 × 关键词」—— 游标、每格翻页数都按这个键。
 
@@ -67,6 +86,23 @@ class NotReady(RuntimeError):
 
 class OperationBusy(RuntimeError):
     """已有操作占着浏览器（检索或登录），当前请求不能开始。"""
+
+
+def friendly_error(exc: BaseException) -> str:
+    """把 Playwright 的英文「页签已关闭」翻成用户看得懂的一句话。
+
+    场景：客户端关闭/重启的瞬间，自动登录还在等页面，Playwright 抛
+    `TargetClosedError: Target page, context or browser has been closed`。
+    直接在界面上显示这句英文，用户只会以为程序坏了。
+    """
+    text = str(exc)
+    if ("Target page, context or browser has been closed" in text
+            or "TargetClosedError" in text
+            or "Browser has been closed" in text
+            or "Connection closed" in text):
+        return ("浏览器窗口被关闭了（或客户端正在退出）。请保持那个自动化浏览器窗口打开，"
+                "然后重试。")
+    return text
 
 
 # Playwright 的 sync API 只能在一个工作线程里跑（见 session.py），所以「碰浏览器」
@@ -106,6 +142,9 @@ def operation_guard(label: str):
 # ---- 工作线程里的实现（只被 run_with_page 调用）----
 
 _INDUSTRY_PATH = "/api/pgy/kol/get_industry_tag"
+#: ⚠️ **必须带 `type=2`**：无参版本只到「市」，`type=2` 才是达人地域的
+#: 「国家 → 省 → 市 → 区」完整树（2026-11-19 在平台 JS 里查到并实测）。
+_AREA_PATH = "/api/solar/area/get_areas?type=2"
 _FETCH_JSON = """
 async (path) => {
   const r = await fetch(path, {credentials: "include"});
@@ -129,6 +168,29 @@ def _industries_inner(page) -> list[dict]:
     return out
 
 
+def _areas_inner(page) -> list[dict]:
+    """平台地域枚举：国家 → 省 → 市 → 区（`type=2`，达人地域专用）。
+
+    `code` 实测与 `name` 相同，筛选要的是**名称**；`value` 用名称（不是 code）：
+    2026-11-19 实测送名称能筛对，而 `location` 参数收到字符串/对象会报
+    10090102「参数格式校验失败」。
+    """
+    payload = page.evaluate(_FETCH_JSON, _AREA_PATH)
+    items = ((payload or {}).get("data") or {}).get("list") or []
+
+    def node(item: dict) -> dict:
+        name = str(item.get("name") or item.get("code") or "")
+        return {
+            "value": name,
+            "label": name,
+            "code": str(item.get("code") or ""),
+            "level": int(item.get("level") or 0),
+            "children": [node(child) for child in (item.get("children") or [])],
+        }
+
+    return [node(item) for item in items]
+
+
 def _resolve_login(page, account: str, password: str) -> str:
     """把页面弄成登录态。返回 `"already"`（本来就登着）或 `"logged_in"`（这次登的）。
 
@@ -145,6 +207,15 @@ def _resolve_login(page, account: str, password: str) -> str:
             break
         page.wait_for_timeout(2_000)
         status = pgy_login.login_status(page)
+    if status == 0 and "/solar/" not in (page.url or ""):
+        # 页面可能停在落地页/半加载状态。再明确打开一次检索页；只重试一次，
+        # 真断网/代理不通时重试十次也一样，不如尽快把可读原因交给用户。
+        try:
+            page.goto(KOL_PAGE, wait_until="domcontentloaded", timeout=60_000)
+            page.wait_for_timeout(3_000)
+            status = pgy_login.login_status(page)
+        except Exception as exc:
+            log.warning("重新打开检索页失败：%s", str(exc).splitlines()[0][:160])
     # 顺手记下来：这样别处查状态就不必再走一次浏览器（那会被检索堵住）。
     _remember_login_state(status)
 
@@ -160,8 +231,25 @@ def _resolve_login(page, account: str, password: str) -> str:
         return "logged_in"
     # 读不到就**不下结论**：报出来让人看一眼，而不是盲目重登或假装没事。
     raise NotReady(
-        "读不到平台登录态（连续 3 次都没问着）。请确认那个浏览器窗口还能正常打开"
-        "蒲公英页面，然后重试。")
+        "读不到平台登录态。请确认屏幕上那个自动化浏览器窗口能正常打开蒲公英"
+        "（如果默认浏览器能打开、它却打不开，多半是代理/VPN 只装在默认浏览器里），"
+        "然后重试。")
+
+
+def _note_platform_choice(page) -> None:
+    """平台偶尔会弹「请先选择合作品牌」的引导浮层。
+
+    它**不是检索的前置条件**（我们用页面上下文直接调检索接口，实测浮层在时
+    接口照样返回 200）。但它会挡住界面，用户看到会以为流程卡住了。
+    这里只**记一条日志**，不替用户选品牌 —— 选哪个品牌是业务决定，
+    `CLAUDE.md` 第七条：不猜、不替客户做业务选择。
+    """
+    try:
+        if page.get_by_text("请先选择合作品牌", exact=False).count():
+            log.info("平台出现「请先选择合作品牌」引导浮层；接口检索不受影响，"
+                     "本次忽略（不替用户选择品牌）。")
+    except Exception:
+        pass
 
 
 def _ensure_ready_inner(page, account: str, password: str, role: str) -> None:
@@ -175,6 +263,10 @@ def _ensure_ready_inner(page, account: str, password: str, role: str) -> None:
             page.wait_for_timeout(5_000)
         except Exception as exc:
             log.warning("打开检索页未正常完成：%s", exc)
+    _note_platform_choice(page)
+
+    # 2026-11-23 起不再访问小红书：最后一列的中位数改从蒲公英详情页取
+    # （见 `enrich.py` 顶部与 `findings.md` F-60）。所以检索前不需要扫码。
 
 
 def _login_only_inner(page, account: str, password: str, role: str) -> dict:
@@ -324,6 +416,87 @@ def classify_terms(terms: list[str], *,
     return results, source
 
 
+def resolve_tier_targets(per_tier: int = 20,
+                         tier_targets: dict[str, int] | None = None) -> dict[str, int]:
+    """把「勾选了哪些量级、每档几条」归一化成一个**完整**的目标表。
+
+    `tier_targets` 为 None 时退回旧行为：六个量级都要，每档 `per_tier` 条
+    （MCP 的 `per_tier` 参数走的就是这条路）。
+
+    给了 `tier_targets` 时，**表里没有的量级视为不勾选**（不检索）；
+    未知量级名直接报错 —— 宁可当场说清，也不要悄悄少搜一个档。
+    """
+    labels = tier_labels()
+    if tier_targets is None:
+        target = max(1, int(per_tier))
+        return {label: target for label in labels}
+
+    unknown = sorted(set(tier_targets) - set(labels))
+    if unknown:
+        raise ValueError(f"未知量级：{'、'.join(unknown)}；可用量级：{'、'.join(labels)}")
+    resolved: dict[str, int] = {}
+    for label in labels:
+        if label not in tier_targets:
+            continue
+        try:
+            value = int(tier_targets[label])
+        except (TypeError, ValueError):
+            raise ValueError(f"量级「{label}」的条数不是整数：{tier_targets[label]!r}")
+        if not 1 <= value <= 500:
+            raise ValueError(f"量级「{label}」的条数必须在 1–500 之间（收到 {value}）")
+        resolved[label] = value
+    if not resolved:
+        raise ValueError("至少要勾选一个量级。")
+    return resolved
+
+
+def location_for(regions: list[str] | None = None) -> list[str] | None:
+    """把界面勾选的**地域路径**翻成平台 `location` 参数（**最深一级名称列表**）。
+
+    界面存的是网页版同款的路径（如 `"中国 安徽 合肥 蜀山区"`）。平台请求体的
+    `location` 只收名称，**发路径会变宽**（实测 `["中国 河北"]` 会带回北京/天津等），
+    所以这里只取每条路径的**最后一级名称**；完整路径留给本地 `build_gate()` 核对。
+
+    多选是「或」：多条路径各自取最后一级，去重后一起发。
+    """
+    names: list[str] = []
+    for item in regions or []:
+        parts = str(item).split()
+        if not parts:
+            continue
+        name = parts[-1]
+        if name and name not in names:
+            names.append(name)
+    return names or None
+
+
+def _regions_of(params: SearchParams) -> list[str]:
+    """本次检索勾选的地域**路径**（本地把关用）。
+
+    优先用 `region_paths`（界面传的完整路径）；测试或旧调用只给了
+    `location` 名称时，退化成名称列表。
+    """
+    paths = [str(item).strip() for item in (params.region_paths or [])
+             if str(item).strip()]
+    if paths:
+        return paths
+    location = params.location
+    if isinstance(location, (list, tuple)):
+        return [str(item).strip() for item in location if str(item).strip()]
+    if isinstance(location, str) and location.strip():
+        return [location.strip()]
+    return []
+
+
+def _region_of(params: SearchParams) -> str:
+    """本次检索的「地域」标识（游标签名用）。没选地域返回空串。
+
+    按**排序后的完整路径**拼接：多选是「或」，换勾选顺序是同一个查询集合，
+    不能因此换一个游标键。
+    """
+    return "、".join(sorted(_regions_of(params)))
+
+
 def _report_page(page_num: int, collected: int, total: int, counts: dict) -> None:
     """每翻完一页就把进度报出去（`search_all` 的 `on_page` 钩子）。"""
     progress.update(page=page_num, collected=collected, total=total,
@@ -331,9 +504,18 @@ def _report_page(page_num: int, collected: int, total: int, counts: dict) -> Non
 
 
 def search(params: SearchParams, *, per_tier: int = 20,
+           tier_targets: dict[str, int] | None = None,
            start_pages: dict | None = None,
-           keywords: list[str] | None = None) -> tuple[list[dict], dict]:
-    """检索并映射成交付行 —— **每个量级各取 `per_tier` 条**。
+           keywords: list[str] | None = None,
+           random_start: bool = True) -> tuple[list[dict], dict]:
+    """检索并映射成交付行 —— **勾选的量级各取设定的条数**。
+
+    `tier_targets`（量级名 → 条数）为空时退回旧口径：六个量级各取 `per_tier` 条。
+    界面上没勾选的量级不会出现在 `tier_targets` 里，**完全不去问平台**。
+
+    地域：`params.location` 是省/市名称列表（见 `SearchParams.location`）。
+    平台侧会按它筛；本地 `build_gate()` 再核对一次 `location` 字段，
+    万一平台忽略了这个参数，名单也不会混进外地人。
 
     ## 为什么改成「按档位逐个问平台」（2026-10-13，findings F-40）
 
@@ -360,7 +542,7 @@ def search(params: SearchParams, *, per_tier: int = 20,
 
     ## 兜底：检索词凑不满的档位，**不带检索词**再翻一遍
 
-    某一档把检索词全跑完仍不够 `per_tier` 时，就丢开检索词、按那一档的粉丝区间
+    某一档把检索词全跑完仍不够它自己的目标条数时，就丢开检索词、按那一档的粉丝区间
     再问一次平台（实测那一档整档的人远多于"命中检索词"的几十人）。
     ⚠️ **代价：兜底收进来的人不保证命中检索词** —— 用户 2026-10-13 拍板接受
     （口径是"每个量级必凑满"优先）。哪几档补了、各补几条，记在
@@ -377,24 +559,39 @@ def search(params: SearchParams, *, per_tier: int = 20,
     而他并不知道原因（第 1 页那批人他还想再看一轮）。回落是个显式的一次性动作，
     日志里记一行。
     """
+    # 勾选的量级 → 每档目标条数。没勾的档**不列进来**，下面的循环就不会问它。
+    targets = resolve_tier_targets(per_tier, tier_targets)
+    labels = tier_labels()
+    active = [label for label in labels if label in targets]
+    region_names = _regions_of(params)
+    region = "、".join(sorted(region_names))
+
     # 把关规则来自**唯一实现** `build_gate()` —— 检索链路与样例生成脚本共用同一份，
     # 不允许各自写一套（曾经因此漏掉预算那道，交付表混进了两个都超的达人）。
-    keep, drops = build_gate()
-    labels = tier_labels()
+    # 地域多选是「或」：只要命中勾选的任意一个就算（与平台一致）。
+    keep, drops = build_gate(region_names or None)
     tiers = {f"{label}({bracket})": (low, high)
              for low, high, label, bracket in TIERS}
 
     def start_for(combo: str) -> int:
-        """这一格（档位 × 关键词）这次从第几页开始；没有游标就是第 1 页。
+        """这一格（档位 × 关键词）这次从第几页开始。
+
+        有游标 → 接着游标；没有游标（首次/清库/升级丢了游标）→ 在
+        `1..SEARCH_RANDOM_PAGES` 里**随机**挑一页，避免两次「开始检索」
+        给出完全相同的名单。`random_start=False`（「从头开始」）固定第 1 页。
 
         ⚠️ 键是**组合**不是档位（`combo_key()`）：同一档里不同关键词是不同结果集，
         页码不能互相挪用；兜底那一趟更是一个独立的池子。
         """
         cursors = start_pages or {}
-        try:
-            return max(1, int(cursors.get(combo) or 1))
-        except (TypeError, ValueError):
-            return 1
+        if combo in cursors:
+            try:
+                return max(1, int(cursors.get(combo) or 1))
+            except (TypeError, ValueError):
+                return 1
+        if random_start and SEARCH_RANDOM_PAGES > 1:
+            return random.randint(1, SEARCH_RANDOM_PAGES)
+        return 1
 
     def key_of(item: dict) -> str:
         index = tier_index(item.get("fansNum"))
@@ -405,6 +602,11 @@ def search(params: SearchParams, *, per_tier: int = 20,
     # 收出好几倍的量；而且同一个人命中多个关键词时会被重复计入，
     # 变相等于"命中多个提高了优先级"（用户明确说过不该这样）。
     todo = [k.strip() for k in (keywords or []) if k and k.strip()] or [""]
+    # 每次打乱关键词顺序：哪个词先把某一档凑满会变，名单也就不会两次一模一样。
+    # 游标键（`search_batch` 的 signature）按**排序后**的词算，换顺序不会丢游标。
+    if SHUFFLE_KEYWORDS and len(todo) > 1:
+        random.shuffle(todo)
+        log.info("本次关键词顺序已随机：%s", "，".join(todo))
     #: 这次有没有真的给检索词。**没有检索词时 todo 就是 `[""]`**，
     #: 那一趟本身就是"不带 keyword 的普通检索" ⇒ 不该再兜底一次（否则同一件事问两遍）。
     with_terms = todo != [""]
@@ -412,20 +614,22 @@ def search(params: SearchParams, *, per_tier: int = 20,
     counts: dict = {}
     seen: set = set()
     raw: list[dict] = []
+    #: 补充主页数据（赞藏 + 近10篇点赞中位数）的结果。见 `enrich.py`。
+    enrichment: dict = {}
     pages_read = 0
     cut_by_limit = False
     cut_count = 0
     per_combo_pages: dict[str, int] = {}
     next_pages: dict[str, int] = {}
     starts: dict[str, int] = {}          # 每一格这次实际从第几页开始（报给界面看）
-    tier_cut: dict[str, bool] = {key: False for key in labels}
-    tier_queries: dict[str, int] = {key: 0 for key in labels}
-    tier_exhausted: dict[str, int] = {key: 0 for key in labels}
+    tier_cut: dict[str, bool] = {key: False for key in active}
+    tier_queries: dict[str, int] = {key: 0 for key in active}
+    tier_exhausted: dict[str, int] = {key: 0 for key in active}
     budget = PAGES_PER_RUN
     total = 0
 
     def satisfied() -> bool:
-        return all(counts.get(k, 0) >= per_tier for k in labels)
+        return all(counts.get(k, 0) >= targets[k] for k in active)
 
     #: 哪些档位动用了「不带检索词」的兜底，各补进来几条（进 stats，供事后核查）。
     fallback_gained: dict[str, int] = {}
@@ -453,7 +657,8 @@ def search(params: SearchParams, *, per_tier: int = 20,
                     _report_page(_base + page_num, len(seen), page_total, tier_counts)
 
                 items, st = search_all(
-                    page, one, per_tier=per_tier, key_of=key_of, tier_keys=[tier_key],
+                    page, one, per_tier=targets[tier_key], key_of=key_of,
+                    tier_keys=[tier_key],
                     throttle=throttle.default, keep=keep, on_page=on_page,
                     start_page=start_page, max_pages=cap,
                     counts=counts, seen=seen, stall_pages=3)
@@ -485,11 +690,11 @@ def search(params: SearchParams, *, per_tier: int = 20,
                 cut_count += 1
             return counts.get(tier_key, 0) - before
 
-        for tier_key in labels:
+        for tier_key in active:
             if budget <= 0:
                 break
             for keyword in todo:
-                if budget <= 0 or counts.get(tier_key, 0) >= per_tier:
+                if budget <= 0 or counts.get(tier_key, 0) >= targets[tier_key]:
                     break
                 run_combo(tier_key, keyword)
 
@@ -504,16 +709,35 @@ def search(params: SearchParams, *, per_tier: int = 20,
             # 这是用户 2026-10-13 拍板接受的取舍 —— 「每个量级必凑满」优先于
             # 「只收命中检索词的人」。所以这件事**必须留痕**：进 stats.keyword_fallback
             # 与运行日志，交出去的名单事后查得出来哪几条是补的（CLAUDE.md 第九条）。
-            if with_terms and budget > 0 and counts.get(tier_key, 0) < per_tier:
+            if with_terms and budget > 0 and counts.get(tier_key, 0) < targets[tier_key]:
                 before = counts.get(tier_key, 0)
                 log.info("档位 %s：检索词全跑完只有 %s 条（目标 %s），不带检索词再翻这一档…",
-                         tier_key, before, per_tier)
+                         tier_key, before, targets[tier_key])
                 got = run_combo(tier_key, "")
                 if got:
                     fallback_gained[tier_key] = got
                     log.warning("档位 %s 补进 %s 条**不带检索词**的结果"
                                 "（这些人不保证命中检索词；见 stats.keyword_fallback）",
                                 tier_key, got)
+
+        # ── 补充笔记数据：赞藏 + 近 10 篇点赞中位数（2026-11-10 新模板）──
+        #
+        # 搜索接口里 `likeCollectCountInfo` 恒为 null，近 10 篇更不在搜索响应里，
+        # 所以拿到名单后还要**逐个**补两趟：蒲公英详情接口 + 蒲公英详情页的笔记数据。
+        # 两步都过统一节流器；单个人失败留空继续（登录失效/人机验证会当场停下）。
+        # 2026-11-23 起全部在蒲公英域内完成，不再访问小红书。
+        if raw and page is not None:
+            progress.begin(
+                progress.ENRICH,
+                f"正在补充赞藏与近10篇点赞（共 {len(raw)} 人，逐个打开蒲公英详情页）…")
+
+            def on_enriched(index: int, total: int, item: dict) -> None:
+                progress.update(enriched=index, enrich_total=total,
+                                current=str(item.get("name") or ""))
+
+            # ⚠️ 不传 `throttle.default`：补主页数据用 `enrich.py` 里**更慢、带长停顿**
+            # 的专用节流器（小红书主页连续刷新会触发安全验证，2026-11-10 实测）。
+            enrichment.update(pgy_enrich.enrich_items(page, raw, on_item=on_enriched))
         return None
 
     progress.begin(progress.SEARCH, "正在按量级逐档检索（浏览器窗口不会自己动，属正常）…")
@@ -545,21 +769,26 @@ def search(params: SearchParams, *, per_tier: int = 20,
         "next_page": min(next_pages.values()) if next_pages else 1,
         # ⚠️ `reached_end` 必须是**可信的**：只有"每一档要么凑满、要么真翻到底"才算到底。
         # 报错的代价是用户以为没救了（或反过来白翻一堆），所以宁可保守。
-        "reached_end": all(tier_done(key) for key in labels),
+        # 只看**勾选的档位** —— 没勾的档我们根本没问，不能算它"没到底"。
+        "reached_end": all(tier_done(key) for key in active),
         "stopped_by_page_limit": cut_by_limit or budget <= 0,
         "keywords_cut_by_limit": cut_count,
         # 高量级本来就少：凑不满的档位如实报出来，别装作没事。
-        "tiers_short": {key: counts.get(key, 0) for key in labels
-                        if counts.get(key, 0) < per_tier},
+        "tiers_short": {key: counts.get(key, 0) for key in active
+                        if counts.get(key, 0) < targets[key]},
         "total": total,
+        "region": region,
         "per_tier_target": per_tier,
-        "per_tier_counts": {key: counts.get(key, 0) for key in labels},
+        "per_tier_targets": {key: targets[key] for key in active},
+        "per_tier_counts": {key: counts.get(key, 0) for key in active},
         "exhausted": not satisfied(),
         "keywords": [k for k in todo if k],
         "pages_per_keyword": per_combo_pages,
         # 哪些档位动用了「不带检索词」的兜底、各补进来几条。**这份名单必须有据可查**：
         # 那些人不保证命中检索词，事后要能说清名单里哪几条是补的（CLAUDE.md 第九条）。
         "keyword_fallback": fallback_gained,
+        # 补充主页数据的成功/失败计数（详情接口、小红书主页）。
+        "enrichment": enrichment,
     }
     # 排序规则见 `mapper.sort_rows()`（量级 → 符合度 → 图文报价 → 粉丝数）。
     # ⚠️ **匹配度（matchNoteNumber）不参与排序** —— 用户明确：命中多少个关键词
@@ -568,22 +797,35 @@ def search(params: SearchParams, *, per_tier: int = 20,
     stats["mapped"] = len(rows)
     stats["kept"] = len(rows)
     stats["dropped"] = {"out_of_range": drops["out_of_range"],
+                        "out_of_region": drops["out_of_region"],
+                        "no_read_median": drops["no_read_median"],
+                        "no_inter_median": drops["no_inter_median"],
                         "over_budget": drops["over_budget"]}
     if pricing.load() is None:
         stats["pricing"] = "未配置（预算把关已关闭）"
     else:
         stats["pricing"] = str(pricing.source())
 
-    short = {k: v for k, v in stats["per_tier_counts"].items() if v < per_tier}
-    log.info("检索完成：共 %s 条（翻 %s 页）；各量级 %s；未凑满的量级 %s",
-             stats["mapped"], stats["pages"], stats["per_tier_counts"], short or "无")
+    short = {k: v for k, v in stats["per_tier_counts"].items() if v < targets[k]}
+    log.info("检索完成：共 %s 条（翻 %s 页）；地域=%s；各量级 %s；未凑满的量级 %s",
+             stats["mapped"], stats["pages"], region or "不限",
+             stats["per_tier_counts"], short or "无")
     if drops["samples"]:
         log.info("超预算样例：%s", " | ".join(drops["samples"]))
+    if drops["region_samples"]:
+        log.info("地域不符样例：%s", " | ".join(drops["region_samples"]))
+    if drops["read_median_samples"]:
+        log.info("阅读中位数（日常）为空/0 样例：%s",
+                 " | ".join(drops["read_median_samples"]))
+    if drops["inter_median_samples"]:
+        log.info("互动中位数（日常）为空/0 样例：%s",
+                 " | ".join(drops["inter_median_samples"]))
     stats["per_tier_short"] = short
     return rows, stats
 
 
 def search_batch(params: SearchParams, *, per_tier: int = 20, mode: str = "fresh",
+                 tier_targets: dict[str, int] | None = None,
                  keywords: list[str] | None = None) -> tuple[list[dict], dict]:
     """按「从头取」或「换一批」取一次名单，并推进游标。
 
@@ -604,7 +846,15 @@ def search_batch(params: SearchParams, *, per_tier: int = 20, mode: str = "fresh
     """
     from backend.services import selection_cursor
 
-    signature = "，".join(k.strip() for k in (keywords or []) if k and k.strip())
+    # ⚠️ 签名按**排序后**的关键词算：`search()` 每次会随机打乱关键词顺序，
+    # 但那是同一个查询集合，不能因为顺序变了就换一个游标键（否则每次都从第 1 页）。
+    clean_keywords = sorted(k.strip() for k in (keywords or []) if k and k.strip())
+    # 地域也是筛选条件：换了地域就是另一个结果集，页码不能挪用。
+    # 带地域时给签名加一个前缀；不带地域的旧签名保持原样，不丢已有游标。
+    region = _region_of(params)
+    signature = "，".join(clean_keywords)
+    if region:
+        signature = f"地域:{region}｜{signature}" if signature else f"地域:{region}"
     start_pages: dict = {}
     if mode == "next":
         start_pages = selection_cursor.load(params.first_industry, params.second_industry,
@@ -612,8 +862,11 @@ def search_batch(params: SearchParams, *, per_tier: int = 20, mode: str = "fresh
         log.info("接着上次的位置往下翻（一级行业=%r，关键词=%r，各格起点=%s）",
                  params.first_industry, signature, start_pages or "从头")
 
+    extra = {} if tier_targets is None else {"tier_targets": tier_targets}
     rows, stats = search(params, per_tier=per_tier, start_pages=start_pages,
-                         keywords=keywords)
+                         keywords=keywords, **extra,
+                         # 「从头开始」必须真的从第 1 页；其它情况没有游标时随机起点。
+                         random_start=(mode != "fresh"))
     # 写回游标：键是「档位 × 关键词」，与读进来时同一套（见 `combo_key`）。
     selection_cursor.save(params.first_industry, params.second_industry,
                           stats.get("next_pages") or {}, signature)
@@ -681,7 +934,8 @@ def apply_terms(params: SearchParams, terms: list[str] | None) -> tuple[SearchPa
 
 
 def run_selection(params: SearchParams, *, per_tier: int = 20, mode: str = "fresh",
-                  terms: list[str] | None = None) -> dict:
+                  terms: list[str] | None = None,
+                  tier_targets: dict[str, int] | None = None) -> dict:
     """跑完整一次选号：登录 → 检索 → 导出。
 
     **这是唯一的实现**：同步接口 `POST /api/selection/run` 与「启动即返回」的
@@ -695,14 +949,15 @@ def run_selection(params: SearchParams, *, per_tier: int = 20, mode: str = "fres
         # 与「账户 → 去登录」共用一把锁：浏览器只有一个工作线程，
         # 同时开两个操作只会互相排队，不如当场告诉用户谁在占着。
         with operation_guard("检索达人"):
-            ensure_ready()   # 必须先登录：取行业清单要它
+            ensure_ready()   # 必须先登录：取行业清单要它（其中也过小红书登录凭证）
             params, keywords, classified = apply_terms(params, terms)
+            extra = {} if tier_targets is None else {"tier_targets": tier_targets}
             rows, stats = search_batch(params, per_tier=per_tier, mode=mode,
-                                       keywords=keywords)
+                                       keywords=keywords, **extra)
         stats["classified_terms"] = classified
         path = export(rows, params, stats=stats)
     except Exception as exc:
-        progress.fail(str(exc))
+        progress.fail(friendly_error(exc))
         raise
 
     payload = {
@@ -778,6 +1033,31 @@ def industries() -> list[dict]:
     要给界面用的请走 `industries_cached()`，那个会退回本地快照。
     """
     return pgy_session.run_with_page(lambda page: _industries_inner(page))
+
+
+def areas() -> list[dict]:
+    """平台地域枚举（中国 → 省 → 市）。**必须活取**：没有登录态取不到。"""
+    return pgy_session.run_with_page(lambda page: _areas_inner(page))
+
+
+def areas_cached() -> tuple[list[dict], str]:
+    """给界面用的地域枚举，返回 `(列表, 来源)`；来源是 `"live"` 或 `"cache"`。
+
+    与行业清单同一套路：活取成功顺手存快照；活取失败但有快照就用快照；
+    两者都没有时把异常原样抛出去，由调用方引导去登录。
+    """
+    from backend.services import area_cache
+
+    try:
+        items = areas()
+    except Exception:
+        cached = area_cache.load()
+        if cached is None:
+            raise
+        log.info("地域枚举活取失败，改用本地快照（%s 个一级地区）", len(cached))
+        return cached, "cache"
+    area_cache.save(items)
+    return items, "live"
 
 
 def industries_cached() -> tuple[list[dict], str]:

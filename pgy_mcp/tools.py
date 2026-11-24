@@ -39,6 +39,18 @@ def _dump(value) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
+def _delivery_rows(rows: list[dict]) -> list[dict]:
+    """只留交付列，剔掉 `__flags__` 这类内部标记。
+
+    `__flags__`（tier_index / rank_group / over_budget / fans …）是后端排序与
+    单元格底色用的，**不是交付列**。原样透给模型，模型很容易在工作区回复里
+    把它「翻译」成额外列（WorkBuddy 实测就会自己加列）。展示层负责过滤，
+    业务语义仍只在 `backend/`。
+    """
+    return [{k: v for k, v in row.items() if not str(k).startswith("__")}
+            for row in rows]
+
+
 def _read_only() -> dict:
     return {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True,
             "openWorldHint": False}
@@ -200,7 +212,11 @@ def tool_selection_progress(client: PgyClient, arguments: dict) -> list[dict]:
             preview = rows[:RESULT_PREVIEW_ROWS]
             lines.append("")
             lines.append(f"前 {len(preview)} 条（共 {len(rows)} 条，完整名单见上面的 Excel）：")
-            lines.append(_dump(preview))
+            lines.append(_dump(_delivery_rows(preview)))
+            lines.append("")
+            lines.append("⚠️ 以上只是预览；**交付表的列以那个 Excel 文件为准**。"
+                         "回复时原样转述，不要自己增删列、也不要把 rows 重排成表格 —— "
+                         "rows 里没有的列就是没有。")
     else:
         lines.append("")
         lines.append("还在进行中，请稍后再查。")

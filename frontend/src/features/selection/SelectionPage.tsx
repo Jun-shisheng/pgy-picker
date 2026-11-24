@@ -3,18 +3,22 @@ import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
-  AlertCircle, CheckCircle2, Download, FolderOpen, Loader2, Play, RefreshCw, RotateCcw,
+  AlertCircle, CheckCircle2, Download, FolderOpen, Loader2, MapPin, Play, RefreshCw,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
+import { Dialog } from "../../components/ui/dialog";
 import {
   api,
+  type AreaNode,
   type BloggerRow,
-  type IndustryNode,
   type SelectionRunResponse,
   type SelectionStatus,
 } from "../../lib/api";
+import { PricingTiersCard, type TierSetting } from "./PricingTiersCard";
 import { ProgressPanel } from "./ProgressPanel";
+import { RegionPicker } from "./RegionPicker";
 
 /**
  * 选号页。业务链路见 `docs/05-业务规则与交付物规格.md`：
@@ -23,12 +27,23 @@ import { ProgressPanel } from "./ProgressPanel";
  * 平台侧**只读**：本页只做检索与导出，不发起任何投放动作。
  * 输出目录、运行日志这些"一次配好"的东西在「设置」页。
  */
+// 与后端 `fields.COLUMNS` 逐字一致（客户最新模板，2026-11-10；11-16 加「小红书号」）。
 const COLUMNS = [
-  "量级", "序号", "昵称", "粉丝量", "主页链接",
-  "IP", "类型", "曝光中位数", "互动中位数", "图文", "视频",
+  "昵称",
+  "小红书号",
+  "粉丝量（w）",
+  "赞藏（w）",
+  "类型",
+  "ip",
+  "图文报价",
+  "视频报价",
+  "主页链接（非蒲公英链接）",
+  "主页近10篇内容的点赞中位数",
 ];
 
-const NUMERIC = new Set(["序号", "粉丝量", "曝光中位数", "互动中位数", "图文", "视频"]);
+const NUMERIC = new Set([
+  "粉丝量（w）", "赞藏（w）", "图文报价", "视频报价", "主页近10篇内容的点赞中位数",
+]);
 
 /** 行上的内部标记（不进交付表，只用来加底色）。 */
 interface RowFlags {
@@ -89,19 +104,22 @@ function staleLoginNote(ageSeconds: number | null | undefined) {
 
 export function SelectionPage() {
   const [status, setStatus] = useState<SelectionStatus | null>(null);
-  const [industries, setIndustries] = useState<IndustryNode[]>([]);
-  const [industriesSource, setIndustriesSource] = useState<"live" | "cache" | "">("");
-  const [loadingIndustries, setLoadingIndustries] = useState(false);
-  const [firstIndustry, setFirstIndustry] = useState("");
-  const [secondIndustry, setSecondIndustry] = useState("");
-  const [perTier, setPerTier] = useState(20);
+  //: 勾选的量级 + 每档条数。默认全选、每档 20 条；每次检索都可能改，不持久化。
+  const [tiers, setTiers] = useState<TierSetting[]>([]);
+  //: 勾选的地域路径（如 `中国 安徽 合肥 蜀山区`，多选是「或」）。空 = 不限。
+  const [regions, setRegions] = useState<string[]>([]);
+  //: 地域选择弹层（照网页版：点开四列选择，重置/确定在底部）。
+  const [regionOpen, setRegionOpen] = useState(false);
+  const [areas, setAreas] = useState<AreaNode[]>([]);
+  const [areasSource, setAreasSource] = useState<"live" | "cache" | "">("");
+  const [loadingAreas, setLoadingAreas] = useState(false);
+  const [areaMessage, setAreaMessage] = useState("");
   const [termText, setTermText] = useState("");
   const [running, setRunning] = useState(false);
   const [runStartedAt, setRunStartedAt] = useState(0);
   const [result, setResult] = useState<SelectionRunResponse | null>(null);
   const [error, setError] = useState("");
   const [exportDir, setExportDir] = useState("");
-  const [industryMessage, setIndustryMessage] = useState("");
 
   // 检索期间每 1 秒拉一次进度：同步接口那几分钟里，这是界面唯一的中间状态来源。
   // 停下来之后再补拉一次，好把「停在哪一步」留在屏幕上。
@@ -117,6 +135,15 @@ export function SelectionPage() {
     try {
       const data = await api.selectionStatus();
       setStatus(data);
+      // 档位清单由后端给（名称/区间与 `fields.TIERS` 同源）。
+      // **保留用户已经改过的勾选与条数**，只补新出现的档位；默认全选、20 条。
+      const incoming = data.tiers ?? [];
+      if (incoming.length > 0) {
+        setTiers((prev) => incoming.map((tier) => (
+          prev.find((item) => item.key === tier.key)
+          ?? { key: tier.key, enabled: true, count: 20 }
+        )));
+      }
       return data;
     } catch (err) {
       setError((err as Error).message);
@@ -124,35 +151,37 @@ export function SelectionPage() {
     }
   }, []);
 
-  // 行业枚举只能在有登录态时拿到（平台接口）。拿不到就用上次的快照；
-  // 连快照都没有，就明确告诉用户"去账户页登录"，而不是摆一个空的空下拉。
-  const loadIndustries = useCallback(async () => {
-    setLoadingIndustries(true);
-    setIndustryMessage("");
+  // 地域枚举：能活取就活取，取不到用上次快照。它不挡检索 ——
+  // 实在拿不到就让用户先不选地域，不能因为一个下拉把整页卡死。
+  const loadAreas = useCallback(async () => {
+    setLoadingAreas(true);
+    setAreaMessage("");
     try {
-      const data = await api.selectionIndustries();
-      setIndustries(data.industries ?? []);
-      setIndustriesSource(data.source);
+      const data = await api.selectionAreas();
+      setAreas(data.areas ?? []);
+      setAreasSource(data.source);
     } catch (err) {
-      setIndustries([]);
-      setIndustriesSource("");
-      setIndustryMessage((err as Error).message);
+      setAreas([]);
+      setAreasSource("");
+      setAreaMessage((err as Error).message);
     } finally {
-      setLoadingIndustries(false);
+      setLoadingAreas(false);
     }
   }, []);
 
   useEffect(() => {
     void (async () => {
-      const data = await refreshStatus();
-      if (data?.logged_in) await loadIndustries();
+      await refreshStatus();
+      void loadAreas();
       try {
         setExportDir((await api.getSettings()).resolved_export_dir);
       } catch {
         /* 设置读不到不挡检索，导出时后端还会再报一次 */
       }
     })();
-  }, [refreshStatus, loadIndustries]);
+  }, [refreshStatus, loadAreas]);
+
+  const enabledTiers = tiers.filter((tier) => tier.enabled);
 
   /**
    * `next`（默认）= 接着这组条件**上次翻到的位置**往下取，拿到的是没看过的新人；
@@ -163,18 +192,23 @@ export function SelectionPage() {
    */
   const run = async (mode: "fresh" | "next" = "next") => {
     setError("");
+    if (enabledTiers.length === 0) {
+      setError("至少要勾选一个量级 —— 一个都不选就没有要检索的人了。");
+      return;
+    }
     setRunning(true);
     setResult(null);
     setRunStartedAt(Date.now());
     try {
       setResult(await api.selectionRun({
-        first_industry: firstIndustry,
-        second_industry: secondIndustry,
-        per_tier: perTier,
+        tier_counts: Object.fromEntries(
+          enabledTiers.map((tier) => [tier.key, tier.count])),
+        enabled_tiers: enabledTiers.map((tier) => tier.key),
+        regions,
         mode,
         terms: parseTerms(termText),
       }));
-      // 检索会顺带把登录做完，回来刷新一下状态与行业清单。
+      // 检索会顺带把登录做完，回来刷新一下状态。
       void refreshStatus();
     } catch (err) {
       setError((err as Error).message);
@@ -201,7 +235,6 @@ export function SelectionPage() {
     }
   };
 
-    const children = industries.find((item) => item.value === firstIndustry)?.children ?? [];
   const markedCount = result
     ? result.rows.filter((row) => overBudget(row).size > 0 || noQuote(row).size > 0).length
     : 0;
@@ -270,18 +303,149 @@ export function SelectionPage() {
             )}
           </div>
 
+          {/* 用户 2026-11-19：生成的 Excel 去哪、怎么打开，要在选号页直接看得到。
+              没跑过时打开设置里的输出目录；跑完后打开**本次产物**所在目录。 */}
+          <div className="flex flex-wrap items-center gap-3 rounded-control border border-border bg-surface-secondary px-3 py-2 text-sm text-text-secondary">
+            <span className="font-medium text-text-tertiary">Excel 输出到：</span>
+            <span className="break-all font-mono text-xs text-text-primary">
+              {result?.export.path || exportDir || "（正在读取设置）"}
+            </span>
+            <Button
+              variant="secondary"
+              className="h-9 px-4 text-sm"
+              onClick={() => void openExportDir()}
+              disabled={!result && !exportDir}
+            >
+              <FolderOpen className="h-4 w-4" /> 打开所在文件夹
+            </Button>
+          </div>
+
           {/* 没配报价档位时，预算把关是关着的 —— 这会直接影响交付物对不对，必须说出来。
               以前这件事只写在 Excel 的「元信息」表里，那张表已按用户要求删掉。 */}
           {status && !status.pricing_configured && (
             <div className="rounded-control border border-warning/40 bg-warning/5 px-3 py-2 text-xs leading-relaxed text-text-secondary">
               <b className="text-warning">报价档位还没配置 —— 预算把关目前是关着的。</b>
-              也就是说<b>超出报价上限的达人会照样进名单</b>。请把档位表放到
-              <span className="font-mono"> pricing.json</span>
-              （或开发期的 <span className="font-mono">资料和说明\报价档位.json</span>）后刷新。
+              也就是说<b>超出报价上限的达人会照样进名单</b>。请到下面
+              <b>「报价档位、预算与每档条数」</b>表里填写并保存
+              （第一次打开会自动带出开发默认值，点保存即生效）。
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* 报价档位、预算与每档条数：整体从「设置」搬到这里，一打开就能看到。
+          用户 2026-11-19：价格/倍数仍是长期配置（保存到 pricing.json），
+          勾选与每档条数只对本次检索生效。 */}
+      <PricingTiersCard
+        tierSettings={tiers}
+        onTierSettingsChange={setTiers}
+        disabled={running}
+        onSaved={() => void refreshStatus()}
+      />
+
+      {/* 地域：照网页版做成「选地域」弹层（四列 + 底部重置/确定），
+          不再把四列直接铺在页面上 —— 用户 2026-11-19 嫌框太丑、大小不对。 */}
+      <Card>
+        <CardHeader>
+          <CardTitle>地域（可多选）</CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-text-secondary">
+              已选 {regions.length} 个{regions.length === 0 ? "（不限）" : ""}
+            </span>
+            <Button
+              className="h-9 px-4 text-sm"
+              onClick={() => setRegionOpen(true)}
+              disabled={running}
+            >
+              <MapPin className="h-4 w-4" /> 选择地域
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs leading-relaxed text-text-secondary">
+            和网页版一样：<b>国家 → 省 → 市 → 区</b>四列。勾父级会
+            <b>级联勾上它下面所有项</b>；取消一个子项，父级变成部分选中。
+            每列顶部的<b>「全部」是本列全选/全不选</b>。
+            <b>勾中的地域都会检索</b>（多选是「或」），不勾 = 不限。
+          </p>
+
+          {regions.length === 0 ? (
+            <p className="text-xs text-text-tertiary">未选择地域 = 不限。</p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {regions.map((path) => (
+                <button
+                  key={path}
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-secondary px-2 py-0.5 text-[11px] text-text-secondary hover:text-text-primary disabled:opacity-50"
+                  disabled={running}
+                  onClick={() => setRegions((prev) => prev.filter((item) => item !== path))}
+                  title={path}
+                >
+                  {path.split(" ").pop()} <span aria-hidden="true">×</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog
+        open={regionOpen}
+        onClose={() => setRegionOpen(false)}
+        title="地域"
+        size="region"
+        bodyClassName="p-0"
+        footer={
+          <div className="flex w-full items-center justify-between">
+            <Button
+              variant="secondary"
+              onClick={() => setRegions([])}
+              disabled={running || regions.length === 0}
+            >
+              重置
+            </Button>
+            <Button onClick={() => setRegionOpen(false)}>确定</Button>
+          </div>
+        }
+      >
+        {loadingAreas && (
+          <p className="flex items-center gap-2 px-4 py-8 text-sm text-text-secondary">
+            <Loader2 className="h-4 w-4 animate-spin" /> 正在加载地域清单…
+          </p>
+        )}
+        {!loadingAreas && areas.length === 0 && (
+          <div className="flex flex-wrap items-center gap-3 px-4 py-8 text-sm">
+            <span className="text-text-tertiary">
+              {areaMessage || "还没有拿到地域清单（不影响检索，不勾地域即可）。"}
+            </span>
+            <Button variant="secondary" className="h-8 px-3 text-xs"
+                    onClick={() => void loadAreas()}>
+              重试加载
+            </Button>
+            {status && !status.logged_in && (
+              <Link to="/accounts" className="text-primary underline">
+                去「账户」页登录
+              </Link>
+            )}
+          </div>
+        )}
+        {!loadingAreas && areas.length > 0 && (
+          <div className="space-y-2">
+            <RegionPicker
+              areas={areas}
+              selected={regions}
+              onChange={setRegions}
+              disabled={running}
+            />
+            {areasSource === "cache" && (
+              <p className="px-3 pb-2 text-[11px] text-text-tertiary">
+                地域清单是<b>上次存下来的快照</b>（这次没能连上平台）。去「账户」页登录后重试加载可刷新。
+              </p>
+            )}
+          </div>
+        )}
+      </Dialog>
 
       <Card>
         <CardHeader>
@@ -289,35 +453,6 @@ export function SelectionPage() {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-end gap-4">
-            <label className="flex flex-col gap-1.5 text-xs text-text-secondary">
-              一级行业
-              <select
-                className="h-9 min-w-[180px] rounded-control border border-border bg-surface px-3 text-sm text-text-primary"
-                value={firstIndustry}
-                onChange={(event) => { setFirstIndustry(event.target.value); setSecondIndustry(""); }}
-              >
-                <option value="">不限</option>
-                {industries.map((item) => (
-                  <option key={item.value} value={item.value}>{item.label}</option>
-                ))}
-              </select>
-            </label>
-
-            <label className="flex flex-col gap-1.5 text-xs text-text-secondary">
-              二级行业
-              <select
-                className="h-9 min-w-[180px] rounded-control border border-border bg-surface px-3 text-sm text-text-primary disabled:opacity-50"
-                value={secondIndustry}
-                disabled={children.length === 0}
-                onChange={(event) => setSecondIndustry(event.target.value)}
-              >
-                <option value="">不限</option>
-                {children.map((item) => (
-                  <option key={item.value} value={item.value}>{item.label}</option>
-                ))}
-              </select>
-            </label>
-
             <label className="flex min-w-[320px] flex-1 flex-col gap-1.5 text-xs text-text-secondary">
               检索词（逗号或两个空格分隔，可留空）
               <input
@@ -328,17 +463,11 @@ export function SelectionPage() {
               />
             </label>
 
-            <label className="flex flex-col gap-1.5 text-xs text-text-secondary">
-              每个量级取多少条
-              <input
-                type="number" min={1} max={500}
-                className="h-9 w-[130px] rounded-control border border-border bg-surface px-3 text-sm text-text-primary"
-                value={perTier}
-                onChange={(event) => setPerTier(Math.max(1, Math.min(500, Number(event.target.value) || 1)))}
-              />
-            </label>
-
-            <Button onClick={() => void run("next")} disabled={running}>
+            <Button
+              onClick={() => void run("next")}
+              disabled={running || enabledTiers.length === 0}
+              title={enabledTiers.length === 0 ? "先在上面至少勾选一个量级" : undefined}
+            >
               {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               {running ? "检索中…" : "开始检索"}
             </Button>
@@ -347,50 +476,35 @@ export function SelectionPage() {
             <Button
               variant="secondary"
               onClick={() => void run("fresh")}
-              disabled={running}
-              title="从第 1 页重新取 —— 同一组条件给的是同一批人（平台排序是写死的）"
+              disabled={running || enabledTiers.length === 0}
+              title={enabledTiers.length === 0
+                ? "先在上面至少勾选一个量级"
+                : "从第 1 页重新取 —— 同一组条件给的是同一批人（平台排序是写死的）"}
             >
               <RotateCcw className="h-4 w-4" /> 从头开始
             </Button>
           </div>
 
-          {/* 行业清单的状态：空着的时候必须说清"为什么空、下一步做什么" */}
-          {loadingIndustries && (
-            <p className="flex items-center gap-2 text-xs text-text-secondary">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> 正在加载行业清单…
-            </p>
-          )}
-          {!loadingIndustries && industries.length === 0 && (
-            <div className="flex flex-wrap items-center gap-3 text-xs">
-              <span className="text-text-tertiary">
-                {industryMessage || "还没有拿到行业清单。"}
-              </span>
-              <Button variant="secondary" className="h-7 px-2 text-xs"
-                      onClick={() => void loadIndustries()}>
-                重试加载
-              </Button>
-              {status && !status.logged_in && (
-                <Link to="/accounts" className="text-primary underline">
-                  去「账户」页登录
-                </Link>
-              )}
-            </div>
-          )}
-          {!loadingIndustries && industries.length > 0 && industriesSource === "cache" && (
-            <p className="text-[11px] text-text-tertiary">
-              行业清单是<b>上次存下来的快照</b>（这次没能连上平台）。去「账户」页登录后重试加载可刷新。
-            </p>
-          )}
-
           <p className="text-xs leading-relaxed text-text-tertiary">
-            一共 <b>6 个量级</b>，每档各取这么多条，量级高的序号在前：
+            一共 <b>6 个量级</b>，<b>只检索上面勾选的那些</b>，每档各取它自己的条数，
+            量级高的排在前面（交付表本身不输出「量级」列）：
             超头部KOL（40w–50w / 30w–40w）、头部KOL（20w–30w / 10w–20w）、
             腰部KOL（5w–10w）、尾部KOL（1w–5w）。
             <br />
-            只收录粉丝 1w–50w、且图文或视频任一在预算内的达人；两个报价都超的会被剔除。
-            曝光/互动中位数<b>照样采集进表，但不再作为收录条件</b>（2026-10-13 起）。
+            <b>地域</b>是网页版同款的国家/省/市/区四列：
+            <b>勾父级会级联勾上它下面所有项</b>；每列「全部」是本列全选/全不选。
+            <b>勾中的地域都会检索</b>（多选是「或」），不勾 = 不限。
             <br />
-            会一直翻到<b>每个量级都凑够</b>为止，可能要几分钟（采集有节流，宁可慢不触发风控）。
+            只收录粉丝 1w–50w、且图文或视频任一在预算内的达人；两个报价都超的会被剔除。
+            交付表按客户最新模板输出 10 列：昵称、小红书号、粉丝量/赞藏（w）、类型、ip、
+            图文/视频报价、小红书主页链接，以及<b>近 10 篇内容的点赞中位数</b>。
+            「类型」会列出该达人的<b>全部</b>内容类目 + 特征标签（如 AvaFoo = 影视综资讯 时尚 ootd 测评）。
+            最后两列会在检索完成后逐个补充：浏览器会一个个打开<b>蒲公英详情页</b>，
+            读取「日常笔记 / 笔记案例」里最新 10 篇的点赞数（<b>不做额外等待、直接下一个</b>；
+            3 天内算过的人走本地缓存）。全部在蒲公英域内完成，<b>不访问小红书、也不需要扫码</b>。
+            遇到安全验证会停下来等你处理，不要手动刷新。
+            <br />
+            会一直翻到<b>每个勾选的量级都凑够</b>为止，可能要几分钟（采集有节流，宁可慢不触发风控）。
             <br />
             某个量级光靠检索词凑不满时（比如 40w–50w 挂上词以后只剩几十人），会
             <b>丢开检索词、按这一档的粉丝区间再翻一遍</b>把这一档补满 ——
@@ -434,7 +548,7 @@ export function SelectionPage() {
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-3">
                 <Button className="h-9 px-4" onClick={() => void openExportDir()}>
-                  <FolderOpen className="h-4 w-4" /> 打开所在目录
+                  <FolderOpen className="h-4 w-4" /> 打开所在文件夹
                 </Button>
                 {/* 只在开发态（浏览器里跑 Vite）留下载：那里调不了 Tauri 命令打开目录。
                     打包后的客户端点了没用 —— 没有注册 on_download，下载会被直接丢弃。 */}
@@ -529,7 +643,7 @@ export function SelectionPage() {
                                   : ""
                             }`}
                           >
-                            {column === "主页链接" && row[column] ? (
+                            {column === "主页链接（非蒲公英链接）" && row[column] ? (
                               <a className="text-primary hover:underline" href={String(row[column])} target="_blank" rel="noreferrer">
                                 主页
                               </a>

@@ -183,6 +183,27 @@ def test_progress_hands_over_the_export_path_and_limits_row_dump():
     assert f"前 {tools.RESULT_PREVIEW_ROWS} 条" in text
 
 
+def test_progress_hides_internal_flags_and_forbids_invented_columns():
+    """内部排序标记不能透给模型，并且要明确禁止「自己加列」。
+
+    `__flags__` 是给排序/底色用的（tier_index / fans / over_budget…），不是交付列。
+    WorkBuddy 实测会把它翻译成额外列 —— 展示层必须过滤，并把「以 Excel 列为准」
+    写进返回文本（工具输出就是写给模型看的操作手册）。
+    """
+    rows = [{"昵称": "某达人", "小红书号": "123",
+             "__flags__": {"tier_index": 0, "fans": 150000, "over_budget": []}}]
+    client = FakeClient({"/api/selection/progress": {
+        "stage": "done", "label": "已完成", "started_at": "10:00:00", "updated_at": "10:05:00",
+        "result": {"rows": rows, "stats": {}, "export": {"path": "D:\\x.xlsx"}},
+    }})
+    text = _texts(tools.tool_selection_progress(client, {}))
+
+    assert "__flags__" not in text
+    assert "tier_index" not in text
+    assert "小红书号" in text, "交付列要照常回显"
+    assert "不要自己增删列" in text
+
+
 def test_progress_when_idle_points_at_the_start_tool():
     client = FakeClient({"/api/selection/progress": {"stage": "idle", "label": "空闲"}})
     text = _texts(tools.tool_selection_progress(client, {}))

@@ -8,8 +8,9 @@ interface DialogProps {
   children: ReactNode;
   onClose: () => void;
   footer?: ReactNode;
-  /** md 用于表单类弹窗；lg 用于日志等需要更大可视区域的场景。 */
-  size?: "md" | "lg";
+  /** md 用于表单类弹窗；lg 用于日志等需要更大可视区域的场景；
+   * region 用于地域四列选择器（接近网页版弹层宽度）。 */
+  size?: "md" | "lg" | "region";
   bodyClassName?: string;
 }
 
@@ -27,7 +28,7 @@ export function Dialog({ open, title, children, onClose, footer, size = "md", bo
       <div
         className={cn(
           "relative w-full rounded-panel border border-border bg-surface shadow-card-hover",
-          size === "lg" ? "max-w-5xl" : "max-w-md",
+          size === "lg" ? "max-w-5xl" : size === "region" ? "max-w-3xl" : "max-w-md",
         )}
       >
         <div className="flex items-center justify-between border-b border-border px-6 py-4">

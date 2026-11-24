@@ -1,4 +1,4 @@
-﻿# 版本号一次性改全 —— 四处必须一致，漏一处 build-installer.ps1 就会拒绝出包。
+﻿# 版本号一次性改全 —— 五处必须一致，漏一处 build-installer.ps1 就会拒绝出包。
 #
 # 用法：
 #   powershell -File build\bump-version.ps1 -Bump patch    # 0.1.0 -> 0.1.1
@@ -38,8 +38,21 @@ $targets = @(
   # app.py 里的版本是 FastAPI(...) 的**字面量** —— build-installer.ps1 就是用正则从这里读的，
   # 所以它必须保持字面量，不能被改成常量引用。
   @{ Path = "backend\app.py"
-     Pattern = '(FastAPI\(title="[^"]*",\s*version=")[^"]+(")'; Note = "app.py" }
+     Pattern = '(FastAPI\(title="[^"]*",\s*version=")[^"]+(")'; Note = "app.py" },
+  # MCP 自报版本：`pgy-mcp --self-test` 与握手里的 serverInfo.version 都读这里。
+  # 曾经漏改过一次（1.2.4 的安装包里 MCP 还报 1.2.4），所以纳进同一份版本清单。
+  @{ Path = "pgy_mcp\__init__.py"
+     Pattern = '(__version__\s*=\s*")[^"]+(")'; Note = "pgy_mcp/__init__.py" }
 )
+
+function Get-ChineseToken([string]$note) {
+  # 每个文件用一个真实存在的中文标记做「编码没被读坏」的探针。
+  switch ($note) {
+    "app.py" { return [char]0x672C + [char]0x5730 + [char]0x670D + [char]0x52A1 }           # 本地服务
+    "pgy_mcp/__init__.py" { return [char]0x672C + [char]0x5730 + [char]0x80FD + [char]0x529B } # 本地能力
+    default { return [char]0x84B2 + [char]0x516C + [char]0x82F1 }                             # 蒲公英
+  }
+}
 
 function Read-Utf8([string]$relative) {
   # 唯一正确的读法：显式 UTF-8。用 Get-Content 会把中文读坏（见文件头的事故说明）。
@@ -69,9 +82,9 @@ Write-Host "版本：$current -> $Version" -ForegroundColor Cyan
 foreach ($t in $targets) {
   $full = Join-Path $root $t.Path
   $text = Read-Utf8 $t.Path
-  # 改之前先确认这个文件里有中文（除 app.py 外都该有）—— 没有说明上一步已经把它读坏了
-  if (-not $text.Contains([char]0x84B2 + [char]0x516C + [char]0x82F1) -and $t.Note -ne "app.py") {
-    throw ("【{0}】里找不到「蒲公英」—— 文件可能已被读坏。停下来人工检查，不要继续写。" -f $t.Note)
+  # 改之前先确认这个文件里有预期的中文标记 —— 没有说明上一步已经把它读坏了
+  if (-not $text.Contains((Get-ChineseToken $t.Note))) {
+    throw ("【{0}】里找不到预期的中文标记 —— 文件可能已被读坏。停下来人工检查，不要继续写。" -f $t.Note)
   }
   $options = if ($t.Multiline) { [System.Text.RegularExpressions.RegexOptions]::Multiline }
              else { [System.Text.RegularExpressions.RegexOptions]::None }
@@ -81,17 +94,13 @@ foreach ($t in $targets) {
   Write-Host ("  已更新 {0}" -f $t.Note) -ForegroundColor Green
 }
 
-# 复核：四处版本一致 **且** 中文没被读坏。只有两条都过才算成功。
+# 复核：五处版本一致 **且** 中文没被读坏。只有两条都过才算成功。
 Write-Host "`n复核：" -ForegroundColor Cyan
 $allOk = $true
 foreach ($t in $targets) {
   $text = Read-Utf8 $t.Path
   $hasVersion = $text.Contains($Version)
-  if ($t.Note -eq "app.py") {
-    $hasChinese = $text.Contains([char]0x672C + [char]0x5730 + [char]0x670D + [char]0x52A1)
-  } else {
-    $hasChinese = $text.Contains([char]0x84B2 + [char]0x516C + [char]0x82F1)
-  }
+  $hasChinese = $text.Contains((Get-ChineseToken $t.Note))
   if ($hasVersion -and $hasChinese) {
     Write-Host ("  [OK] {0}  版本={1} 中文完好" -f $t.Note, $Version) -ForegroundColor Green
   } else {

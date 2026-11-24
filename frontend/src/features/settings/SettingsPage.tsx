@@ -12,6 +12,9 @@ import { LogViewer } from "./LogViewer";
  * 三块：**表格输出位置**（原先挤在选号页上，跟"筛选"混在一起；
  * 它其实是"一次配好长期不变的偏好"）、**运行日志**（出问题时唯一的现场）、
  * **系统状态**（日志在哪、启动失败原因在哪）。
+ *
+ * ⚠️ **报价档位/预算表已移到选号页**（用户 2026-11-19）：每档条数每次选号都可能
+ * 不同，价格也要在开跑前当场确认，所以跟选号放在一起。
  */
 export function SettingsPage() {
   const [exportDir, setExportDir] = useState("");
@@ -92,6 +95,10 @@ export function SettingsPage() {
         <h1 className="text-lg font-semibold text-text-primary">设置</h1>
         <p className="mt-1 text-sm text-text-secondary">
           本机偏好与运行日志。设置只存在这台机器上，不会上传。
+          <br />
+          <span className="text-text-tertiary">
+            报价档位、预算与每档条数已移到「选号」页，检索前当场确认。
+          </span>
         </p>
       </div>
 

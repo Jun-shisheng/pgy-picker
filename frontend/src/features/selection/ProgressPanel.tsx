@@ -6,6 +6,7 @@ import type { SelectionProgress } from "../../lib/api";
 const STEPS = [
   { key: "login", label: "登录平台" },
   { key: "search", label: "检索达人" },
+  { key: "enrich", label: "补充笔记数据" },
   { key: "export", label: "生成 Excel" },
 ] as const;
 
@@ -97,6 +98,13 @@ export function ProgressPanel({ progress, startedAtMs }: ProgressPanelProps) {
         </div>
       )}
 
+      {progress.stage === "enrich" && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-text-secondary">
+          <span>已补充 <b>{progress.enriched ?? 0}</b> / {progress.enrich_total ?? 0} 人</span>
+          {progress.current && <span className="text-text-tertiary">当前：{progress.current}</span>}
+        </div>
+      )}
+
       {progress.detail && !failed && (
         <p className="text-text-secondary">{progress.detail}</p>
       )}
@@ -113,7 +121,9 @@ export function ProgressPanel({ progress, startedAtMs }: ProgressPanelProps) {
 
       {progress.active && (
         <p className="text-[11px] text-text-tertiary">
-          提示：采集是在页面里直接调平台接口，那个浏览器窗口**不会自己翻页或滚动**，属正常。
+          {progress.stage === "enrich"
+            ? "正在逐个打开蒲公英详情页读取最近 10 篇笔记的点赞数；全部在蒲公英内完成，不访问小红书。遇到安全验证会停下等你处理，不要手动刷新。"
+            : "提示：检索是在页面里直接调平台接口，那个浏览器窗口不会自己翻页或滚动，属正常。"}
         </p>
       )}
     </div>

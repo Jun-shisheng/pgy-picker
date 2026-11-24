@@ -72,6 +72,12 @@ CLOSE_FORCE_AFTER_SECONDS = 10.0
 PORT_ENV = "MIO_EDGE_DEBUG_PORT"
 # 指定 Edge 可执行文件（默认自动发现）。
 EXECUTABLE_ENV = "MIO_BROWSER_EXECUTABLE"
+# 可选：给自动化浏览器显式指定代理。默认走系统代理（与日常 Edge 一致）；
+# 如果用户的默认浏览器装了**代理扩展**（系统代理里没有），专属配置不会带那个扩展，
+# 表现就是「默认浏览器能开、程序里的浏览器打不开」。这时设
+#   set PGY_BROWSER_PROXY=http://127.0.0.1:7890
+# 再启动即可（具体地址看用户自己的代理软件）。
+PROXY_ENV = "PGY_BROWSER_PROXY"
 
 # 端口探测与启动等待上限。Edge 冷启动（要读几十 MB 的配置目录）实测 2–8 秒，
 # 25 秒余量足够；超时必须报错，绝不无限等。
@@ -297,18 +303,25 @@ def extension_flags() -> list[str]:
     与人手一致的速度。`--disable-popup-blocking` 是「新建创意」在新标签页打开
     表单所必需的（Playwright 默认参数里有，自己启动时必须显式给）。
     """
-    return [
+    flags = [
         "--no-first-run",
         "--no-default-browser-check",
         # 不显示"上次异常退出，是否恢复页面"的气泡：我们接管的是用户日常的浏览器，
         # 被强杀过的实例下次启动会把这个气泡和一堆旧标签页一起带回来（用户看到的"垃圾页"）。
         "--hide-crash-restore-bubble",
         "--disable-popup-blocking",
-        "--disable-background-timer-throttpgy",
+        "--disable-background-timer-throttling",
         "--disable-backgrounding-occluded-windows",
         "--disable-renderer-backgrounding",
         "--disable-features=CalculateNativeWinOcclusion",
     ]
+    proxy = (os.environ.get(PROXY_ENV) or "").strip()
+    if proxy:
+        flags.append(f"--proxy-server={proxy}")
+        # 本机调试端口/回环地址永远不走代理，否则可能连自己的 CDP 都连不上。
+        flags.append("--proxy-bypass-list=127.0.0.1;localhost;<-loopback>")
+        log.info("自动化浏览器使用显式代理：%s", proxy)
+    return flags
 
 
 def probe_endpoint(port: int, *, timeout: float = PROBE_TIMEOUT_SECONDS) -> dict | None:
@@ -539,8 +552,9 @@ def edge_windows_native() -> list[dict]:
                     if os.path.basename(path.value).casefold() in ("msedge.exe", "chrome.exe"):
                         cls = ctypes.create_unicode_buffer(256)
                         user32.GetClassNameW(hwnd, cls, len(cls))
-                        rows.append({"pid": int(pid.value), "window": 1 if user32.IsWindowVisible(hwnd) else 0,
-                                     "cls": cls.value})
+                        rows.append({"pid": int(pid.value),
+                                     "window": 1 if user32.IsWindowVisible(hwnd) else 0,
+                                     "cls": cls.value, "hwnd": int(hwnd)})
             finally:
                 kernel32.CloseHandle(process)
             return True
@@ -560,6 +574,55 @@ def windowed_edge_processes() -> list[dict]:
             continue
         seen.setdefault(item["pid"], {"pid": item["pid"], "window": 1, "user_data_dir": "", "cmd": ""})
     return list(seen.values())
+
+
+def focus_edge_window_for_endpoint(user_data_dir: Path | str, port: int | None = None) -> bool:
+    """按「配置目录 / 调试端口」找到**自动化那个 Edge 主进程**，再把它的窗口抬到前台。
+
+    不能直接用启动时的 Popen pid：Edge 可能把启动器变成子进程，真正持有窗口的是
+    另一个 msedge 主进程（实测启动 pid=19820，窗口属于 pid=38660）。
+    """
+    profile = str(user_data_dir).rstrip("\\").casefold()
+    try:
+        rows = edge_main_processes()
+    except Exception:
+        rows = []
+    for item in rows:
+        cmd = str(item.get("cmd") or "")
+        if port and f"--remote-debugging-port={int(port)}" in cmd:
+            return focus_edge_window(int(item.get("pid") or 0))
+        given = str(item.get("user_data_dir") or "").rstrip("\\").casefold()
+        if profile and given and profile == given:
+            return focus_edge_window(int(item.get("pid") or 0))
+    return False
+
+
+def focus_edge_window(pid: int | None = None) -> bool:
+    """把 Edge 窗口切到前台（必要时从最小化恢复）。
+
+    为什么需要：平台的验证页/登录页在自动化 Edge 里，用户经常找不到那个窗口
+    （被客户端挡住或最小化了）。Playwright 的 `page.bring_to_front()` 只切页签，
+    不保证把 OS 窗口抬到最前；这里补一刀 Win32 的 SetForegroundWindow。
+    2026-11-23 起小红书扫码链路已移除；这个工具保留给需要人工处理的验证窗口。
+    """
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        rows = [row for row in edge_windows_native() if row.get("window") and row.get("hwnd")]
+        if pid:
+            rows = [row for row in rows if int(row.get("pid") or 0) == int(pid)]
+        if not rows:
+            return False
+        hwnd = int(rows[0]["hwnd"])
+        user32.ShowWindow(hwnd, 9)          # SW_RESTORE：最小化的先还原
+        user32.SetForegroundWindow(hwnd)
+        return True
+    except Exception as exc:
+        log.info("切换浏览器窗口到前台失败：%s", type(exc).__name__)
+        return False
 
 
 def processes_using(user_data_dir: Path | str) -> list[dict]:

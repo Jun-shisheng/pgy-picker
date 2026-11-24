@@ -257,6 +257,28 @@ fn port_owners(port: u16) -> Vec<u32> {
 ///
 /// 用 `pgy` 而不是参考项目的 `playwright`：Ling 与本项目可能同机共存，
 /// 判据必须能把两者区分开。
+/// 通知后端**优雅收尾**：把自动化页切回 PGY 首页、停 Playwright 驱动。
+///
+/// **不关浏览器**（用户 2026-11-10 要求）；只结束自动化接管。
+/// 必须先于 `kill_backend` 调用：直接强杀 sidecar 会把 Playwright 驱动留成孤儿，
+/// 页签可能保持在被拦截/半加载状态，看起来就是“死锁、转圈、点不动”。
+fn request_backend_shutdown() {
+    let addr = SocketAddr::from(([127, 0, 0, 1], BACKEND_PORT));
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) else {
+        return;
+    };
+    // 页面切回首页可能花几秒；给 4 秒上限，绝不因为收尾失败卡住客户端退出。
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(8)));
+    let request = format!(
+        "POST /api/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{BACKEND_PORT}\r\n\
+         Content-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_ok() {
+        let mut buffer = [0u8; 256];
+        let _ = stream.read(&mut buffer);
+    }
+}
+
 fn probe_backend_identity() -> bool {
     let addr = SocketAddr::from(([127, 0, 0, 1], BACKEND_PORT));
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(3)) else {
@@ -386,6 +408,9 @@ pub fn run() {
 
     app.run(|handle, event| {
         if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
+            // 先让后端把驱动停掉、自动化页切回 PGY 首页；**不关浏览器**。
+            // 放在 kill_backend 之前，避免 Playwright 驱动变成孤儿进程。
+            request_backend_shutdown();
             if let Ok(mut process) = handle.state::<BackendProcess>().0.lock() {
                 if let Some(child) = process.take() {
                     kill_backend(child.pid());

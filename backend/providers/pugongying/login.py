@@ -54,18 +54,44 @@ def login_status(page) -> int:
         return 0
 
 
+def _viewport(page) -> tuple[int, int]:
+    """真实窗口的 CSS 视口尺寸（不依赖 `page.viewport_size`：外部 CDP 接管时它可能为空）。"""
+    try:
+        size = page.evaluate("() => ({w: window.innerWidth, h: window.innerHeight})")
+        return int(size.get("w") or 0), int(size.get("h") or 0)
+    except Exception:
+        return 0, 0
+
+
+def _in_viewport(box: dict | None, width: int, height: int) -> bool:
+    if not box or not width or not height:
+        return True
+    x, y = float(box.get("x") or 0), float(box.get("y") or 0)
+    right, bottom = x + float(box.get("width") or 0), y + float(box.get("height") or 0)
+    return right > 0 and bottom > 0 and x < width and y < height
+
+
 def _click_text(page, texts: list[str], label: str) -> bool:
-    """按候选文案点**可见**的那个。"""
+    """按候选文案点**可见且在视口内**的那个。
+
+    ⚠️ Playwright 的 `is_visible()` 只表示"有布局盒子"，**不代表在屏幕上**。
+    平台导航栏那个同名的「登录」按钮在视口外（实测 x≈1133），先点它等于点空。
+    所以这里用 window.innerWidth/Height 做一次真实可见性判断。
+    """
+    width, height = _viewport(page)
     for text in texts:
         try:
             loc = page.get_by_text(text, exact=True)
             for i in range(loc.count()):
                 item = loc.nth(i)
                 try:
-                    if item.is_visible():
-                        item.click(timeout=4_000)
-                        log.info("已点击%s：%s", label, text)
-                        return True
+                    if not item.is_visible():
+                        continue
+                    if not _in_viewport(item.bounding_box(), width, height):
+                        continue
+                    item.click(timeout=4_000)
+                    log.info("已点击%s：%s", label, text)
+                    return True
                 except Exception:
                     continue
         except Exception:
@@ -83,19 +109,32 @@ def login(page, account: str, password: str, *, role: str = "", timeout_s: int =
         log.info("已是登录态")
         return True
 
-    # ① 打开登录弹窗
-    _click_text(page, ["账号登录", "登录"], "登录入口")
-    page.wait_for_timeout(3_000)
+    # ① 打开登录弹窗。页面/弹窗可能还在渲染，点不到就等一会儿再点一次
+    # （自动登录发生在客户端刚启动时，最容易撞上"页面还没稳"）。
+    opened = False
+    for attempt in range(3):
+        if _click_text(page, ["账号登录", "登录"], "登录入口"):
+            opened = True
+            break
+        page.wait_for_timeout(1_500)
+    if not opened:
+        log.warning("找不到/点不到登录入口（页面可能还没加载完）")
+    page.wait_for_timeout(2_000)
 
     # ② 切到「账号登录」页签（默认在「短信登录」，密码框在未激活页签里不可见）
     _click_text(page, ["账号登录"], "账号登录页签")
-    page.wait_for_timeout(2_000)
+    page.wait_for_timeout(1_500)
 
-    # ③ 填表
+    # ③ 等密码框出现。没出现就再试一次切换页签 —— 弹窗渲染慢时第一次点会落空。
     try:
-        page.locator("input[type='password']").first.wait_for(state="visible", timeout=10_000)
+        page.locator("input[type='password']").first.wait_for(state="visible", timeout=8_000)
     except Exception:
-        log.warning("密码框不可见，登录可能无法继续")
+        log.warning("密码框暂不可见，再试一次切换到「账号登录」")
+        _click_text(page, ["账号登录"], "账号登录页签")
+        try:
+            page.locator("input[type='password']").first.wait_for(state="visible", timeout=8_000)
+        except Exception:
+            log.warning("密码框仍不可见，登录可能无法继续")
     try:
         account_input = page.locator(
             "input[placeholder*='邮箱']:visible, input[placeholder*='账号']:visible").first
@@ -136,7 +175,7 @@ def login(page, account: str, password: str, *, role: str = "", timeout_s: int =
 
     ok = login_status(page) == 200
     if not ok:
-        log.warning("登录未成功（可能是验证码/短信验证，需要人工在窗口里处理）")
+        log.warning("登录未成功（可能是验证码/短信验证/网络未就绪，需要人工在窗口里处理）")
         return False
     log.info("登录成功")
 

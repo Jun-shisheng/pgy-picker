@@ -26,6 +26,9 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  /* 窗口放大/系统缩放变化时，100vw 可能比客户区多出一条滚动条宽度，
+     右侧会露出一块空白。滚动交给内容区自己（AppShell 的 main）。 */
+  overflow: hidden;
 }
 
 body {

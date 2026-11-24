@@ -52,7 +52,15 @@ class SearchParams:
     fans_num_up: int = 0                # ⚠️ 疑似「粉丝上升数」，**不是**粉丝量下限，保持 0
     note_type: int = 0                  # 0=不限 1=图文 2=视频（平台约定，待复核）
     gender: str | None = None           # 达人性别
-    location: Any = None                # 达人地域
+    #: 达人地域（**中文名称列表**，如 `["安徽"]` / `["合肥"]` / `["蜀山区"]`）。2026-11-19 实测：
+    #: - 字符串 `"安徽"` → 平台报 10090102「参数格式校验失败」；
+    #: - `["安徽"]` / `["合肥"]` / `["蜀山区"]` → 只回对应地域的人；
+    #: - `["安徽", "合肥"]` 是 **OR**，省名会把整个省带回来 —— 要精确到下级就**只发最深一级的名称**。
+    location: Any = None                # 达人地域（名称列表，见上）
+    #: 界面勾选地域的**完整路径**（如 `["中国 安徽 合肥 蜀山区"]`）。**不进请求体**：
+    #: 请求体 `location` 只发每条的**最深一级名称**（平台按名称筛更准），
+    #: 完整路径用来在本地按层级核对，防止同名区县混进来。
+    region_paths: list[str] = field(default_factory=list)
     fans_gender: int = 0                # 粉丝性别
     exclude_low_active: bool = False    # 剔除低活
     exclude_cooperated: bool = False    # 剔除已合作

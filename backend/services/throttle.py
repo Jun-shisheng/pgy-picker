@@ -35,10 +35,19 @@ class Throttle:
         self.total_wait = 0.0
 
     def __call__(self) -> None:
-        """等够间隔再返回。"""
+        """等够间隔再返回。
+
+        ⚠️ **不能把"空闲时间"当额度攒起来**（2026-11-10 实测踩到）：
+        原实现是 `target = _last + interval + jitter`。检索结束后闲置 50 秒再去
+        补主页数据时，前 ~30 次调用会认为"早该发了"，**连续裸发、一次不等** ——
+        小红书就是在这个突发里触发了安全验证。现在用 `max(_last, now)`：
+        空闲再久，下一次调用也至少等一个完整间隔，不会补发攒下的额度。
+        """
         with self._lock:
             now = time.monotonic()
-            target = self._last + self._interval + random.uniform(0, self.jitter)
+            target = (max(self._last, now)
+                      + self._interval
+                      + random.uniform(0, self.jitter))
             wait = max(0.0, target - now)
             self.calls += 1
             self.total_wait += wait

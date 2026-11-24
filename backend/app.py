@@ -50,13 +50,45 @@ class SettingsPatch(BaseModel):
     export_dir: str = Field(default="", description="表格输出目录；留空恢复默认")
 
 
+class PricingTierIn(BaseModel):
+    """一个报价档位。**区间/名称固定**，设置页只允许改价格。"""
+
+    label: str
+    bracket: str = ""
+    min: int
+    max: int
+    image: int = Field(default=0, ge=0, description="图文基准价（元）")
+    video: int = Field(default=0, ge=0, description="视频基准价（元）")
+
+
+class PricingIn(BaseModel):
+    """设置页提交的报价档位表。"""
+
+    multiplier: float = Field(default=1.3, gt=0, le=10, description="预算上限倍数")
+    tiers: list[PricingTierIn]
+
+
 class SelectionRun(BaseModel):
     """一次选号请求的参数。**定义在模块级**：局部定义的模型在 FastAPI 里
     解析 body 时容易出问题（第一次就栽在这，表现为无声的 422）。"""
 
     first_industry: str = Field(default="", description="一级行业 ID（不是名称）；留空=不限")
     second_industry: str = ""
-    per_tier: int = Field(default=20, ge=1, le=500, description="**每个量级**取多少条")
+    per_tier: int = Field(default=20, ge=1, le=500,
+                          description="**每个量级**取多少条（旧参数；给了 `tier_counts` 时作默认值）")
+    tier_counts: dict[str, int] = Field(
+        default_factory=dict,
+        description="量级名 → 条数，如 `{\"头部KOL(20w-30w)\": 20}`。"
+                    "**键必须在 `enabled_tiers` 里**；没列出的量级不检索。留空=六个量级都取 `per_tier` 条")
+    enabled_tiers: list[str] | None = Field(
+        default=None,
+        description="勾选的量级名（取自 `/api/selection/status` 的 `tiers[].key`）。"
+                    "留空/null=全部量级。空列表=一个都不选（会被拒绝）")
+    regions: list[str] = Field(
+        default_factory=list,
+        description="勾选地域的**完整路径**（如 `中国 安徽 合肥 蜀山区`，取自 "
+                    "`/api/selection/areas`）。请求体只发每条的最后一级名称，"
+                    "完整路径用于本地按层级核对。**多选是「或」**。留空=不限")
     interval: float = Field(default=1.5, ge=0.5, le=30.0, description="翻页间隔秒数；保守优先")
     mode: str = Field(default="next",
                       description="`next`（默认）=接着该条件上次翻到的位置往下取，"
@@ -76,6 +108,34 @@ def _mode_of(body: SelectionRun) -> str:
     —— 既免得拼错一个词就 422，也免得"默默退回每次给同一批"。
     """
     return "fresh" if body.mode == "fresh" else "next"
+
+
+def _tier_targets_of(body: SelectionRun) -> dict[str, int] | None:
+    """把界面的「勾选 + 条数」翻成 `selection_service` 要的目标表。
+
+    没传新字段（只有 `per_tier`）时返回 None ⇒ 旧口径：六个量级都取 `per_tier` 条。
+    传了就把业务校验交给 `selection_service.resolve_tier_targets()`（唯一实现），
+    这里只负责把异常翻成 400。
+    """
+    if body.enabled_tiers is None and not body.tier_counts:
+        return None
+
+    from backend.providers.pugongying.fields import tier_labels
+    from backend.services import selection_service
+
+    labels = tier_labels()
+    enabled = labels if body.enabled_tiers is None else list(dict.fromkeys(
+        str(item).strip() for item in body.enabled_tiers if str(item).strip()))
+    unknown = sorted(set(enabled) - set(labels))
+    if unknown:
+        raise OperationHttpError(
+            400, "BAD_TIER_TARGETS",
+            f"未知量级：{'、'.join(unknown)}；可用量级：{'、'.join(labels)}")
+    targets = {name: body.tier_counts.get(name, body.per_tier) for name in enabled}
+    try:
+        return selection_service.resolve_tier_targets(body.per_tier, targets)
+    except ValueError as exc:
+        raise OperationHttpError(400, "BAD_TIER_TARGETS", str(exc)) from exc
 
 
 class AccountUpsert(BaseModel):
@@ -99,12 +159,13 @@ def create_app() -> FastAPI:
         try:
             yield
         finally:
-            # 退出时**关掉本工具自己开的自动化页签**（"查完销毁"，避免页签越堆越多），
-            # 但不碰用户在别的窗口里的任何东西（CLAUDE.md 第二条）。
+            # 退出时**只释放内存里的会话对象**：浏览器窗口、页签、登录态都不动
+            # （用户 2026-11-10 明确要求：「程序关闭后浏览器是正常的，不要关闭和退出」）。
+            # `shutdown_playwright()` 只停驱动进程，不会关掉独立启动的 Edge。
             try:
                 from backend.providers.pugongying import session as pgy_session
                 pgy_session.close_session()
-                # 顺序不能反：先关会话，再停驱动。**必须放在进程退出路径上** ——
+                # 顺序不能反：先释放会话引用，再停驱动。**必须放在进程退出路径上** ——
                 # 停过之后就无法再建会话了（见 session._playwright 的说明）。
                 pgy_session.shutdown_playwright()
             except Exception:
@@ -113,7 +174,7 @@ def create_app() -> FastAPI:
 
     # ⚠️ 版本号必须是这里的**字面量**：build-installer.ps1 会用正则从本文件读出它，
     # 与 tauri.conf.json / Cargo.toml / frontend/package.json 做一致性校验。
-    app = FastAPI(title="Pgy 本地服务", version="1.0.2", lifespan=lifespan)
+    app = FastAPI(title="Pgy 本地服务", version="1.2.5", lifespan=lifespan)
 
     # ---------- 错误信封 ----------
 
@@ -204,6 +265,22 @@ def create_app() -> FastAPI:
         """
         return {"status": "ok", "service": "ready", "browser": "playwright", "product": "pgy"}
 
+    @app.post("/api/shutdown")
+    def shutdown() -> dict:
+        """客户端退出前调用：收拾自动化页 + 停 Playwright 驱动。
+
+        **只结束自动化接管**，不关浏览器、不关登录态（`CLAUDE.md` 第二条）。
+        必须在 `kill_backend` 之前调用 —— 否则驱动可能变成孤儿进程，
+        留下的页签看起来像死锁/一直转圈。
+        """
+        from backend.providers.pugongying import session as pgy_session
+        try:
+            pgy_session.prepare_for_exit()
+            pgy_session.shutdown_playwright()
+        except Exception:
+            log.warning("退出收尾失败（不影响进程退出）", exc_info=True)
+        return {"ok": True}
+
     @app.get("/api/session")
     def session() -> dict:
         """当前会话状态桩。
@@ -234,6 +311,7 @@ def create_app() -> FastAPI:
         所以必须搬到界面上 —— 不然它会彻底隐形。
         """
         from backend.providers.pugongying import pricing
+        from backend.providers.pugongying.fields import TIERS
         from backend.services import credential_service, selection_service
         try:
             status = selection_service.login_status()
@@ -255,6 +333,13 @@ def create_app() -> FastAPI:
             "role": selection_service.DEFAULT_ROLE,
             "pricing_configured": pricing_config is not None,
             "pricing_multiplier": pricing_config.multiplier if pricing_config else None,
+            # 选哪些量级、各取多少条**在选号页当场设**（每次可能不同），
+            # 这里只提供**固定的档位清单**（名称/区间与 `fields.TIERS` 同源）。
+            "tiers": [
+                {"key": f"{label}({bracket})", "label": label, "bracket": bracket,
+                 "low": low, "high": high}
+                for low, high, label, bracket in TIERS
+            ],
         }
 
     @app.get("/api/selection/progress")
@@ -289,6 +374,28 @@ def create_app() -> FastAPI:
             raise OperationHttpError(500, "INDUSTRIES_FAILED",
                                      f"读取行业枚举失败：{exc}", retryable=True) from exc
 
+    @app.get("/api/selection/areas")
+    def selection_areas() -> dict:
+        """地域枚举（省/直辖市 → 市），前端地域下拉用。
+
+        形状与行业枚举一致：`source` 如实标注是这次真去平台问的（`live`）
+        还是上次的快照（`cache`）。`value` 就是**中文名称** —— 平台 `location`
+        参数收名称（2026-11-19 实测），不是 code。
+        """
+        from backend.services import selection_service
+        try:
+            items, source = selection_service.areas_cached()
+            return {"areas": items, "source": source}
+        except selection_service.NotReady as exc:
+            raise OperationHttpError(
+                404, "NOT_CACHED",
+                "还没有拿到过地域清单，而且当前没有可用的登录态。"
+                "请先到「账户」页登录，再回到这里加载。") from exc
+        except Exception as exc:
+            log.exception("读取地域枚举失败")
+            raise OperationHttpError(500, "AREAS_FAILED",
+                                     f"读取地域枚举失败：{exc}", retryable=True) from exc
+
     @app.post("/api/selection/run")
     def selection_run(body: SelectionRun) -> dict:
         """跑一次选号：登录 → 检索 → 映射 → 导出 Excel。返回行数据与产物路径。
@@ -300,13 +407,17 @@ def create_app() -> FastAPI:
         from backend.services import selection_service, throttle
 
         throttle.default.min_interval = body.interval
+        region_paths = [str(item).strip() for item in body.regions if str(item).strip()]
+        location = selection_service.location_for(region_paths)
         params = SearchParams(first_industry=body.first_industry,
-                              second_industry=body.second_industry)
+                              second_industry=body.second_industry,
+                              location=location, region_paths=region_paths)
+        targets = _tier_targets_of(body)
         try:
             # 编排、进度、失败落点都在 service 里（**唯一实现**），见 run_selection。
             return selection_service.run_selection(
                 params, per_tier=body.per_tier, mode=_mode_of(body),
-                terms=body.terms)
+                terms=body.terms, tier_targets=targets)
         except selection_service.OperationBusy as exc:
             raise OperationHttpError(409, "OPERATION_CONFLICT", str(exc), retryable=True) from exc
         except selection_service.NotReady as exc:
@@ -314,7 +425,8 @@ def create_app() -> FastAPI:
         except Exception as exc:
             log.exception("选号失败")
             raise OperationHttpError(500, "SELECTION_FAILED",
-                                     f"选号失败：{exc}", retryable=True) from exc
+                                     f"选号失败：{selection_service.friendly_error(exc)}",
+                                     retryable=True) from exc
 
     @app.post("/api/selection/start")
     def selection_start(body: SelectionRun) -> dict:
@@ -335,14 +447,18 @@ def create_app() -> FastAPI:
                 "已经有一次检索在进行中，请等它结束后再启动。", retryable=True)
 
         throttle.default.min_interval = body.interval
+        region_paths = [str(item).strip() for item in body.regions if str(item).strip()]
+        location = selection_service.location_for(region_paths)
         params = SearchParams(first_industry=body.first_industry,
-                              second_industry=body.second_industry)
+                              second_industry=body.second_industry,
+                              location=location, region_paths=region_paths)
         mode = _mode_of(body)
+        targets = _tier_targets_of(body)
 
         def worker():
             try:
                 selection_service.run_selection(params, per_tier=body.per_tier, mode=mode,
-                                                terms=body.terms)
+                                                terms=body.terms, tier_targets=targets)
             except Exception:
                 # 失败原因已经写进进度快照了，这里只是别让后台线程的异常刷到 stderr。
                 log.info("后台检索结束（失败原因见进度快照）", exc_info=True)
@@ -419,7 +535,8 @@ def create_app() -> FastAPI:
         except Exception as exc:
             log.exception("登录失败")
             raise OperationHttpError(500, "LOGIN_FAILED",
-                                     f"登录失败：{exc}", retryable=True) from exc
+                                     f"登录失败：{selection_service.friendly_error(exc)}",
+                                     retryable=True) from exc
         return {"connected": True, "already": bool(result.get("already"))}
 
     # ---------- 设置 ----------
@@ -449,6 +566,52 @@ def create_app() -> FastAPI:
         from backend.services import settings_service
         ok, detail = settings_service.validate(body.export_dir)
         return {"ok": ok, "detail": detail}
+
+    # ---------- 报价档位 ----------
+    # 价格是商业敏感数据，但这是**本机回环 + 来源校验**的接口，只给本机设置页用；
+    # 不会进 MCP（`CLAUDE.md` 第四条：凭据类/敏感配置不经过大模型）。
+
+    @app.get("/api/pricing")
+    def get_pricing() -> dict:
+        """当前生效的档位；没配置时回落到开发默认（或空白六档）供设置页预填。"""
+        from backend.providers.pugongying import pricing
+
+        config = pricing.load()
+        payload = pricing.snapshot()
+        return {
+            "configured": config is not None,
+            "source": str(pricing.source() or ""),
+            "default_available": pricing.default_snapshot() is not None,
+            **payload,
+        }
+
+    @app.get("/api/pricing/default")
+    def get_default_pricing() -> dict:
+        """开发期/打包内置的默认档位。用于设置页的「恢复开发默认」。"""
+        from backend.providers.pugongying import pricing
+
+        payload = pricing.default_snapshot()
+        if payload is None:
+            raise OperationHttpError(
+                404, "NO_DEFAULT_PRICING",
+                "这个安装包里没有内置默认报价档位，请手动填写后保存。")
+        return payload
+
+    @app.put("/api/pricing")
+    def put_pricing(body: PricingIn) -> dict:
+        """保存档位到 `<数据目录>/pricing.json`，下一次检索立即生效。"""
+        from backend.providers.pugongying import pricing
+
+        try:
+            config = pricing.save(body.model_dump())
+        except ValueError as exc:
+            raise OperationHttpError(400, "BAD_PRICING", f"报价档位不合法：{exc}") from exc
+        return {
+            "configured": True,
+            "source": str(pricing.source() or ""),
+            "multiplier": config.multiplier,
+            "tiers": pricing.snapshot().get("tiers", []),
+        }
 
     @app.get("/api/logs/tail")
     def logs_tail(limit: int = 400, level: str = "", q: str = "") -> dict:

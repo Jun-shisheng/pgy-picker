@@ -23,6 +23,9 @@
 ;   · `exports\`      —— 已交付的 Excel（用户 2026-10-12 定：Excel 放在安装目录下）；
 ;   · `pricing.json`  —— 报价档位表（商业敏感、不入库，只能由使用者自己放；
 ;                        查找位置见 `backend/providers/pugongying/pricing.py`）。
+;   · `selection-cursor.json` —— 「换一批」翻页游标（丢了就会每次从第 1 页开始，
+;                        两次「开始检索」可能拿到一模一样的名单）；
+;   · `notes-cache.json`   —— 近10篇笔记点赞中位数缓存（丢了会重新打开蒲公英详情页）。
 ;      ⚠️ **只保 `pricing.json` 这个 ASCII 路径**，不保备选的 `资料和说明\报价档位.json`
 ;      —— 那是个中文目录名，而本文件按 ANSI(GBK) 读取、**路径只允许 ASCII**（见文件顶部）。
 ;      所以装机后请把档位表放成 `%LOCALAPPDATA%\Pgy\pricing.json`，升级才不会丢。
@@ -39,12 +42,16 @@
   nsExec::ExecToLog 'cmd /c mkdir "%TEMP%\pgy-keep-stash"'
   nsExec::ExecToLog 'cmd /c if exist "$LOCALAPPDATA\Pgy\exports" move "$LOCALAPPDATA\Pgy\exports" "%TEMP%\pgy-keep-stash\exports"'
   nsExec::ExecToLog 'cmd /c if exist "$LOCALAPPDATA\Pgy\pricing.json" move "$LOCALAPPDATA\Pgy\pricing.json" "%TEMP%\pgy-keep-stash\pricing.json"'
+  nsExec::ExecToLog 'cmd /c if exist "$LOCALAPPDATA\Pgy\selection-cursor.json" move "$LOCALAPPDATA\Pgy\selection-cursor.json" "%TEMP%\pgy-keep-stash\selection-cursor.json"'
+  nsExec::ExecToLog 'cmd /c if exist "$LOCALAPPDATA\Pgy\notes-cache.json" move "$LOCALAPPDATA\Pgy\notes-cache.json" "%TEMP%\pgy-keep-stash\notes-cache.json"'
 !macroend
 
 !macro PGY_RESTORE_USER_FILES
   nsExec::ExecToLog 'cmd /c if not exist "$LOCALAPPDATA\Pgy" mkdir "$LOCALAPPDATA\Pgy"'
   nsExec::ExecToLog 'cmd /c if exist "%TEMP%\pgy-keep-stash\exports" move "%TEMP%\pgy-keep-stash\exports" "$LOCALAPPDATA\Pgy\exports"'
   nsExec::ExecToLog 'cmd /c if exist "%TEMP%\pgy-keep-stash\pricing.json" move "%TEMP%\pgy-keep-stash\pricing.json" "$LOCALAPPDATA\Pgy\pricing.json"'
+  nsExec::ExecToLog 'cmd /c if exist "%TEMP%\pgy-keep-stash\selection-cursor.json" move "%TEMP%\pgy-keep-stash\selection-cursor.json" "$LOCALAPPDATA\Pgy\selection-cursor.json"'
+  nsExec::ExecToLog 'cmd /c if exist "%TEMP%\pgy-keep-stash\notes-cache.json" move "%TEMP%\pgy-keep-stash\notes-cache.json" "$LOCALAPPDATA\Pgy\notes-cache.json"'
 !macroend
 
 !macro PGY_CLEAR_BROWSER_PROFILE

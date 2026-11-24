@@ -2,13 +2,16 @@
 
 **这是数据不是逻辑**：平台改版时改这里，不改代码。
 
-依据：`docs/04-达人字段字典.md`（v0.2，2026-10-12 实测）；
+依据：客户最新模板 `资料和说明/最新模板/ai需求.xlsx`（2026-11-10 生效）；
 原始字段清单：`docs/evidence/bloggers-*/field-inventory.md`。
 
-⚠️ 口径待定项：
-- `曝光中位数` 有多个候选（日常/合作、曝光/阅读），见 `docs/05` D4；
-  默认取**合作**口径（客户是投放提报场景），可配置。
-- `类型` 可能是内容类目、交易类型或特征标签，见 `docs/05` D2；默认取内容类目一级。
+⚠️ 口径说明（2026-11-10 实测）：
+- `类型` = 蒲公英详情页昵称下方那两个标签：`contentTags[0].taxonomy1Tag`
+  + `featureTags[0]`（如「母婴 vlog」「生活记录 职场生活」）。
+- `赞藏` = 详情接口的 `likeCollectCountInfo`（单位是「个」，输出时换算成 w）。
+- `主页近10篇内容的点赞中位数` = **蒲公英详情页**「日常笔记 / 笔记案例」里
+  按发布时间最新的 10 篇点赞数中位数（`notes_rate` + `notes_detail` 合并）；
+  **2026-11-23 起不再访问小红书主页**（见 `enrich.py` 顶部与 `findings.md` F-60）。
 """
 
 from __future__ import annotations
@@ -75,51 +78,58 @@ def in_range(fans: int | None) -> bool:
 
 
 # ---- 交付表列定义（顺序即 Excel 列顺序）----
-
+#
+# ⚠️ **2026-11-10 起以客户最新模板为准**（`资料和说明/最新模板/ai需求.xlsx`）：
+# 一人一行。旧的「量级 / 序号 / 曝光中位数 / 互动中位数」四列已删除
+# （用户原话：「曝光中位数那些就去掉，变成一个近10篇点赞的中位数」）。
+# **2026-11-16 用户要求**：昵称与粉丝量之间加一列「小红书号」
+# （客户截图 `资料和说明/最新模板/屏幕截图 2026-11-10 090959.png` 上标出来的
+# 「小红书号：49321476371」，即详情接口的 `redId`，**不是** `userId` 那串 24 位内部 id）。
+#
+# 表头字符串**逐字照抄模板**（含全角括号与那个小写的 `ip`）——
+# 客户拿到表后要按表头对列，差一个字都算错。
 COLUMNS: list[str] = [
-    "量级", "序号", "昵称", "粉丝量", "主页链接",
-    "IP", "类型", "曝光中位数", "互动中位数", "图文", "视频",
+    "昵称",
+    "小红书号",
+    "粉丝量（w）",
+    "赞藏（w）",
+    "类型",
+    "ip",
+    "图文报价",
+    "视频报价",
+    "主页链接（非蒲公英链接）",
+    "主页近10篇内容的点赞中位数",
 ]
-
-# 「量级」列由粉丝量派生，不由 FIELD_MAP 采（见 mapper）。
-DERIVED_FROM_FANS = "量级"
 
 # ---- 平台字段映射：客户列 → (平台字段列表, 变换) ----
 # 变换是给 mapper 看的标记，不是可调用对象（保持本文件可被安全地当作数据读取）。
-
+#
+# 数据来源（2026-11-10 实测）：
+#   - 除最后一列外均来自**蒲公英达人详情接口** `GET /api/solar/cooperator/user/blogger/{userId}`
+#     （`name` / `redId` / `fansNum` / `likeCollectCountInfo` / `contentTags` + `featureTags` /
+#     `location` / `picturePrice` / `videoPrice`）；
+#   - 最后一列来自**蒲公英详情页**（`pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/{userId}`），
+#     由 `enrich.py` 让页面自己发 `notes_rate` / `notes_detail`，合并后算「最新 10 篇点赞中位数」。
+#     ⚠️ **2026-11-23 起不再访问 `www.xiaohongshu.com`**（用户拍板，见 `findings.md` F-60）。
+#
+# 赞藏**不是**搜索接口的字段（搜索返回的 `likeCollectCountInfo` 恒为 null），
+# 必须逐个走详情接口；曝光/互动中位数已按用户要求移出交付表。
 FIELD_MAP: dict[str, dict] = {
-    "昵称":       {"fields": ["name"], "transform": "str"},
-    "粉丝量":     {"fields": ["fansNum"], "transform": "int"},
-    "主页链接":   {"fields": ["userId"], "transform": "homepage"},
-    "IP":         {"fields": ["location"], "transform": "str"},
-    "类型":       {"fields": ["contentTags", "tradeType"], "transform": "content_tag"},
-    # 曝光中位数 / 互动中位数 / 阅读中位数：**合作笔记口径（Coop）**。
-    #
-    # ⚠️⚠️ 这块翻过车，2026-10-12 反复了一次，**改动前务必读完**：
-    #
-    # 平台对同一指标给了**两套**字段，名字只差几个字母：
-    #   `accumCoopImpMedinNum30d` / `readMidCoop30` / `interMidCoop30`  = **合作笔记**口径
-    #   `accumCommonImpMedinNum30d` / `interMidNum`                    = **日常笔记**口径
-    #
-    # **UI 上「合作笔记」区块的三行，对应的是 Coop 那套**（用户 2026-10-12 用生耶女孩直接对照确认）：
-    #   UI 曝光中位数 42,362(70.31%)  ← accumCoopImpMedinNum30d = 42270（差 0.2%）
-    #   UI 阅读中位数  5,161(67.22%)  ← readMidCoop30           =  5154（差 0.1%）
-    #   UI 互动中位数    585(78.37%)  ← interMidCoop30          =   559（差 4.6%）
-    #
-    # **我中间错改成 Common 的原因**：拿「有云详情页 notes_rate.impMedian=109704」去对
-    # accumCommon=108873，看到接近就推翻了正确答案 —— 但**详情页那个 impMedian 根本不是
-    # UI 合作笔记区显示的数**，参照物选错了。**教训：口径要以客户看到的 UI 原文对照为准，
-    # 不要拿另一个页面的同名字段间接推断。**
-    "曝光中位数": {"fields": ["accumCoopImpMedinNum30d"], "transform": "int"},
-    "互动中位数": {"fields": ["interMidCoop30"], "transform": "int"},
-    "图文":       {"fields": ["picturePrice"], "transform": "price"},
-    "视频":       {"fields": ["videoPrice"], "transform": "price"},
+    "昵称":                    {"fields": ["name"], "transform": "str"},
+    # 小红书号 = 详情页昵称下方那串数字（客户截图里的「小红书号：49321476371」），
+    # 接口字段是 `redId`。⚠️ **不是 `userId`**（那是 24 位内部 id，用于拼主页链接）。
+    "小红书号":                {"fields": ["redId"], "transform": "str"},
+    "粉丝量（w）":              {"fields": ["fansNum"], "transform": "wan"},
+    "赞藏（w）":                {"fields": ["likeCollectCountInfo"], "transform": "wan"},
+    "类型":                    {"fields": ["contentTags", "featureTags"], "transform": "content_type"},
+    "ip":                      {"fields": ["location"], "transform": "str"},
+    "图文报价":                 {"fields": ["picturePrice"], "transform": "price"},
+    "视频报价":                 {"fields": ["videoPrice"], "transform": "price"},
+    "主页链接（非蒲公英链接）":   {"fields": ["userId"], "transform": "homepage"},
+    "主页近10篇内容的点赞中位数": {"fields": ["homepageLikeMedian"], "transform": "int"},
 }
 
 # 自有列（渲染时生成）
-DERIVED_COLUMNS: dict[str, str] = {
-    "量级": "由「粉丝量」落 TIERS 档位算出",
-    "序号": "渲染时按行序生成",
-}
+DERIVED_COLUMNS: dict[str, str] = {}
 
 HOMEPAGE_TEMPLATE = "https://www.xiaohongshu.com/user/profile/{user_id}"

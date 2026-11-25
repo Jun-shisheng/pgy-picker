@@ -84,25 +84,18 @@ PgyPicker 把这条链路做死成一条**垂直采集流水线**：
 
 ## 架构
 
-```
-┌──────────────────────────────┐
-│  Tauri 2 桌面壳（Rust）        │
-│  ┌────────────────────────┐  │
-│  │ React 19 前端（Vite）    │  │
-│  └───────────┬────────────┘  │
-└──────────────┼───────────────┘
-               │ HTTP 127.0.0.1:18081
-┌──────────────▼───────────────┐        ┌──────────────────────┐
-│ pgy-backend.exe              │◄───────│ pgy-mcp.exe           │
-│ FastAPI + uvicorn（sidecar）  │  HTTP  │ stdio MCP 薄客户端     │
-│ 唯一业务内核                  │        └──────────▲───────────┘
-└──────────────┬───────────────┘                   │ MCP
-               │ Playwright / CDP                   │
-┌──────────────▼───────────────┐        ┌──────────┴───────────┐
-│ 系统 Edge（专属配置目录）       │        │ MCP Client            │
-│ 全程可见，登录态复用           │        │ （WorkBuddy / Claude  │
-└──────────────────────────────┘        │   Desktop / …）        │
-                                        └──────────────────────┘
+```mermaid
+flowchart LR
+  UI["React 19 前端<br/>（Tauri 2 壳内的 WebView）"]
+  BE["pgy-backend.exe<br/>FastAPI + uvicorn<br/>127.0.0.1:18081"]
+  EDGE["系统 Edge<br/>专属配置目录<br/>全程可见"]
+  MCP["pgy-mcp.exe<br/>stdio MCP 薄客户端"]
+  CLIENT["MCP Client<br/>WorkBuddy / Claude Desktop / …"]
+
+  UI -- "HTTP" --> BE
+  BE -- "Playwright / CDP" --> EDGE
+  CLIENT -- "MCP (stdio)" --> MCP
+  MCP -- "HTTP" --> BE
 ```
 
 - **业务语义只存在于 `backend/`**。React 前端与 `pgy_mcp` 都是薄客户端。

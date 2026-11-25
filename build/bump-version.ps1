@@ -94,6 +94,17 @@ foreach ($t in $targets) {
   Write-Host ("  已更新 {0}" -f $t.Note) -ForegroundColor Green
 }
 
+# package-lock.json 的根版本不影响构建，但仓库里留着旧版本会让人误以为发的是旧包。
+# 只改根对象与 packages[""] 两处，不碰依赖条目。
+$lockPath = Join-Path $root "frontend\package-lock.json"
+if (Test-Path -LiteralPath $lockPath) {
+  $lockText = [System.IO.File]::ReadAllText($lockPath, [System.Text.Encoding]::UTF8)
+  $lockText = [regex]::Replace($lockText, '(\A\{\s*"name"\s*:\s*"[^"]+",\s*"version"\s*:\s*")[^"]+(")', ('${1}' + $Version + '${2}'), [System.Text.RegularExpressions.RegexOptions]::Singleline)
+  $lockText = [regex]::Replace($lockText, '("packages"\s*:\s*\{\s*"":\s*\{\s*"name"\s*:\s*"[^"]+",\s*"version"\s*:\s*")[^"]+(")', ('${1}' + $Version + '${2}'), [System.Text.RegularExpressions.RegexOptions]::Singleline)
+  [System.IO.File]::WriteAllText($lockPath, $lockText, $utf8)
+  Write-Host "  已更新 frontend/package-lock.json（根版本）" -ForegroundColor Green
+}
+
 # 复核：五处版本一致 **且** 中文没被读坏。只有两条都过才算成功。
 Write-Host "`n复核：" -ForegroundColor Cyan
 $allOk = $true

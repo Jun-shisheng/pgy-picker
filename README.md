@@ -260,7 +260,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build-installer.ps1
 
 ## 贡献
 
-欢迎 Issue 与 PR。提交前请确保：
+欢迎 Issue 与 PR。详细约定见 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题请走私密渠道（[SECURITY.md](SECURITY.md)），不要开公开 Issue。
+
+提交前请确保：
 
 1. `python -m pytest` 全绿，`npm run build` 通过；
 2. 新增字段必须先在真实页面上实测，未验证的字段标注清楚，不要直接写进产品代码；

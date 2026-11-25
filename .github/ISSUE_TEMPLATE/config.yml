@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使用文档 / README
+    url: https://github.com/Jun-shisheng/pgy-picker#readme
+    about: 先看安装、配置与常见问题，很多问题这里已有答案
+  - name: 最新版本与安装包
+    url: https://github.com/Jun-shisheng/pgy-picker/releases
+    about: 下载最新安装包；升级前请先看 Release 说明
+  - name: 安全问题
+    url: https://github.com/Jun-shisheng/pgy-picker/security/advisories/new
+    about: 涉及凭据、本地接口、风控绕过等问题请私密报告，不要开公开 issue

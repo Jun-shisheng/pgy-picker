@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.core.mio_core import ROOT
+from backend.core.pgy_core import ROOT
 from backend.providers.pugongying import pricing
 from backend.services import settings_service
 from backend.services.selection_service import export_payload

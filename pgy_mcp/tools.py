@@ -1,10 +1,10 @@
 """MCP 工具集：把 Pgy 本地服务的能力交给外部 Agent（WorkBuddy）。
 
 **只读**：本项目对蒲公英只读，是做数据采集/选号的，不涉及任何投放动作，
-所以工具集里**永远不会有平台写操作**（`CLAUDE.md` 第一条）。
+所以工具集里**永远不会有平台写操作**（项目设计约束 第一条）。
 
 **这里不写业务**：工具只做三件事 —— 拼 URL、把结果翻成人话、把错误原样上抛。
-流程语义全在 `backend/`（`CLAUDE.md` 第五条）。**尤其不要在这里"猜"**：
+流程语义全在 `backend/`（项目设计约束 第五条）。**尤其不要在这里"猜"**：
 比如不要替模型把行业名称翻译成 ID，那是平台参数翻译，属于业务。
 
 工具描述是**写给模型看的操作手册**，不是写给人看的注释：
@@ -138,7 +138,7 @@ def tool_start_selection(client: PgyClient, arguments: dict) -> list[dict]:
         "per_tier": int(arguments.get("per_tier") or 20),
     }
     # `mode` **只在调用方明确给了才透传** —— "默认取哪个"是后端（唯一业务内核）的语义，
-    # MCP 这边再判一次就是重复实现（CLAUDE.md 第五条），而且一定会漂。
+    # MCP 这边再判一次就是重复实现（项目设计约束 第五条），而且一定会漂。
     requested_mode = str(arguments.get("mode") or "")
     if requested_mode:
         body["mode"] = requested_mode
@@ -227,7 +227,7 @@ def tool_selection_progress(client: PgyClient, arguments: dict) -> list[dict]:
 def tool_login(client: PgyClient, arguments: dict) -> list[dict]:
     """触发一次登录（**会让平台上出现一个可见的浏览器窗口，需要人工过验证码**）。
 
-    凭据由人在客户端里配置，**本工具不接收也不返回任何账号密码**（`CLAUDE.md` 第四条）。
+    凭据由人在客户端里配置，**本工具不接收也不返回任何账号密码**（项目设计约束 第四条）。
     """
     result = client.post("/api/account/login", {}, timeout=SELECTION_TIMEOUT_SECONDS)
     already = bool(result.get("already"))

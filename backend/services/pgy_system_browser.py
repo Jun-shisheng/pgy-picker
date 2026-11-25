@@ -42,7 +42,7 @@ from urllib.request import urlopen
 from urllib.parse import urlparse
 from typing import Any
 
-from backend.core.mio_core import ROOT
+from backend.core.pgy_core import ROOT
 
 log = logging.getLogger(__name__)
 
@@ -300,8 +300,8 @@ def extension_flags() -> list[str]:
 
     保留这组「关闭后台节流」的开关：窗口被最小化或压在别的窗口后面时，Chromium
     会把渲染进程降频，依赖定时器/rAF 的平台异步渲染链会明显变慢；RPA 需要看到
-    与人手一致的速度。`--disable-popup-blocking` 是「新建创意」在新标签页打开
-    表单所必需的（Playwright 默认参数里有，自己启动时必须显式给）。
+    与人手一致的速度。`--disable-popup-blocking` 是平台在新标签页打开登录/表单
+    所必需的（Playwright 默认参数里有，自己启动时必须显式给）。
     """
     flags = [
         "--no-first-run",

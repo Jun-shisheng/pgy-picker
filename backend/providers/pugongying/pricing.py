@@ -1,6 +1,6 @@
 """报价档位与预算把关。
 
-**规则**（用户 2026-10-12 确认，出自 `资料和说明/说明.txt`）：
+**规则**：
 
     平台报价上限 = 对应粉丝档位的公司基准价 × 倍数（默认 1.3）
     **图文、视频任一报价在上限之内 → 通过**；两个都超 → 不进名单
@@ -10,7 +10,7 @@
 **不入库**的配置文件里，运行时读取：
 
     1. `<数据目录>/pricing.json`          —— 用户保存的正式位置（设置页可改）
-    2. `<项目根>/资料和说明/报价档位.json`   —— 开发期来源（已 gitignore）
+    2. `<项目根>/pricing.local.json`   —— 开发期来源（已 gitignore）
     3. `<sidecar 内置>/pricing.default.json` —— 打包时从开发期 JSON 复制进来
        （`--add-data`，含真实价格，不入库）
 
@@ -30,7 +30,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from backend.core.mio_core import ROOT
+from backend.core.pgy_core import ROOT
 from .fields import TIERS
 
 log = logging.getLogger("pgy.pricing")
@@ -42,8 +42,8 @@ DEFAULT_MULTIPLIER = 1.3
 CONFIG_PATH = ROOT / "pricing.json"
 CONFIG_CANDIDATES = (
     CONFIG_PATH,
-    # 开发期来源（已 gitignore）
-    ROOT / "资料和说明" / "报价档位.json",
+    # 开发期来源（已 gitignore，自行创建）
+    ROOT / "pricing.local.json",
     # 打包时由 build-sidecar.ps1 / build-installer.ps1 从开发期 JSON 复制进来
     # （`--add-data`），装机后第一次启动用它初始化 pricing.json。
     Path(__file__).with_name("pricing.default.json"),

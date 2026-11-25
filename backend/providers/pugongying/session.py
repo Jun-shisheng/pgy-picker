@@ -1,6 +1,6 @@
 """蒲公英浏览器会话：接管**专属配置**浏览器，提供已登录的 Playwright page。
 
-边界（CLAUDE.md 第二、四条）：
+边界（项目设计约束 第二、四条）：
 - **绝不接管用户日常浏览器**：始终用我们自己的 `profiles/pugongying`。
 - 凭据只在内存里传给页面填表，**不进日志、不进数据库、不进证据文件**。
 
@@ -17,8 +17,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from backend.core.mio_core import ROOT
-from backend.services import mio_system_browser as sb
+from backend.core.pgy_core import ROOT
+from backend.services import pgy_system_browser as sb
 
 log = logging.getLogger("pgy.pugongying.session")
 
@@ -38,7 +38,7 @@ class BrowserSessionError(RuntimeError):
 # ──────────────────────────────────────────────────────────────────────────
 # 单工作线程：Playwright 的 sync API **不能跨线程使用**（对象绑定在创建它的
 # 线程/事件循环上），而 FastAPI 的接口默认跑在线程池里。所以所有浏览器操作
-# 都必须提交到**同一个线程**执行 —— 这也是姊妹项目「单工作线程串行」的由来。
+# 都必须提交到**同一个线程**执行 —— 这就是「单工作线程串行」的由来。
 # 副作用是好的：平台侧天然串行，不会因为我们并发而触发风控。
 # ──────────────────────────────────────────────────────────────────────────
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgy-browser")
@@ -286,7 +286,7 @@ def _close_inner() -> None:
 
     用户 2026-11-10 明确要求：「程序关闭后浏览器是正常的，不要关闭和退出」。
     之前这里会 `page.close()` + `browser.close()`，客户端一关，自动化 Edge 和
-    登录态一起没了 —— 与 `CLAUDE.md` 第二条（关客户端只结束自动化接管）也不符。
+    登录态一起没了 —— 与 项目设计约束 第二条（关客户端只结束自动化接管）也不符。
 
     现在：
     - 不关页签（关最后一个页签会把窗口带走）；

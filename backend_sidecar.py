@@ -29,7 +29,7 @@ def _data_dir() -> Path:
 
 os.environ.setdefault("PGY_DATA_DIR", str(_data_dir()))
 
-from backend.services import mio_logging  # noqa: E402  必须在数据目录确定之后导入
+from backend.services import pgy_logging  # noqa: E402  必须在数据目录确定之后导入
 
 log = logging.getLogger("pgy.sidecar")
 
@@ -76,7 +76,7 @@ def _start_parent_watchdog() -> None:
 
 def _fatal(title: str, detail: str) -> int:
     """记录致命启动错误并返回退出码。"""
-    path = mio_logging.write_startup_error(title, detail)
+    path = pgy_logging.write_startup_error(title, detail)
     log.critical("%s\n%s", title, detail)
     try:
         # 打包后没有控制台，stderr 可能是 None；写日志失败不能盖住真正的错误。
@@ -88,10 +88,10 @@ def _fatal(title: str, detail: str) -> int:
 
 
 def main() -> int:
-    mio_logging.setup_logging()
-    mio_logging.install_excepthooks()
+    pgy_logging.setup_logging()
+    pgy_logging.install_excepthooks()
     log.info("本地服务启动中 pid=%s 数据目录=%s", os.getpid(), os.environ.get("PGY_DATA_DIR"))
-    browser = mio_logging.browser_environment()
+    browser = pgy_logging.browser_environment()
     log.info("浏览器环境：%s", browser)
     if not browser["available"]:
         # 不阻塞启动：登录时会给出可操作的错误，界面也提供「安装浏览器内核」入口。

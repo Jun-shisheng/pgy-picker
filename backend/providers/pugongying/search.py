@@ -1,7 +1,7 @@
 """蒲公英达人搜索：把筛选条件翻译成平台请求，在页面上下文里调用。
 
-请求体形状来自 M1 实测（`docs/evidence/bloggers-*/blogger-search.request.json`）。
-**这是 `FilterSpec` → `platform_query` 的翻译层**（`docs/03` §5.1）。
+请求体形状来自对平台页面自身请求的实测抓包。
+**这是「界面筛选条件」→「平台请求体」的翻译层**：业务判断不在这里，只做字段映射。
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ class SearchParams:
     - **一级/二级行业**：`firstIndustry`/`secondIndustry` 要的是**ID 不是名称**
       （母婴 = `698c373db570b54469f1b874`），枚举见 `/api/pgy/kol/get_industry_tag`。
 
-    ✅ **粉丝量区间**（2026-10-13 已破译，见 `findings.md` F-40）：
+    ✅ **粉丝量区间**（2026-10-13 已破译，见 实测记录）：
     `fansNumberLower` / `fansNumberUpper`，两个**平铺**的整数键。
     ⚠️ 平台界面保存的筛选方案里那个 `fansCount` 是**界面自己的状态形状**，
     照它构造的四种写法实测**全部被接口忽略**（返回结果与不传时逐条相同）——
@@ -44,7 +44,7 @@ class SearchParams:
     #: 带上它以后按档位逐个问平台，那一档单独就有 **2150** 人。
     fans_lower: int = 0
     fans_upper: int = 0
-    #: **笔记关键词**（用户 2026-10-12 实测，见 findings F-35）：检索页那个搜索框
+    #: **笔记关键词**（用户 2026-10-12 实测，见 findings）：检索页那个搜索框
     #: （placeholder「按笔记关键词找博主」）打的就是本接口，只是多带这个字段。
     #: 命中的人会带回 `matchNoteNumber`（命中多少篇笔记）—— 那就是"匹配度"。
     #: 一个请求只能带**一个**关键词（它是字符串不是数组），多关键词要逐个搜再合并。
@@ -196,7 +196,7 @@ def search_all(page, params: SearchParams, *, per_tier: int = 20, key_of=None,
     而不是为了凑数无限翻页（那既慢又容易被风控盯上）。
 
     返回 `(达人列表, 统计)`；统计里带**每个量级实际取到几条**。
-    **每一次翻页都过 throttle** —— 节流是功能需求不是优化项（`CLAUDE.md` 第三条）。
+    **每一次翻页都过 throttle** —— 节流是功能需求不是优化项（项目设计约束 第三条）。
     """
     collected: list[dict] = []
     # `counts` / `seen` 可以由调用方传进来**跨多次调用共享** —— 多关键词检索时，

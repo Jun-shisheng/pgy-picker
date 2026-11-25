@@ -6,8 +6,8 @@ import { Sidebar } from "./Sidebar";
 /**
  * 最小外壳：侧边栏 + 状态横幅 + 内容区。
  *
- * 刻意不带 Topbar 与全局操作进度条——那两个在参考项目里与投放业务强耦合
- * （账户登录态、投放进度轮询），本项目等有了会话与任务模型再按需加回。
+ * 刻意不带 Topbar 与全局操作进度条——那两个会与账户登录态、任务进度轮询强耦合，
+ * 本项目等有了完整的会话与任务模型再按需加回。
  * 选号自己的进度画在选号页里（`features/selection/ProgressPanel`）。
  */
 export function AppShell() {

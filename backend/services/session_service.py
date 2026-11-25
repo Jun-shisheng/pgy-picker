@@ -18,11 +18,9 @@ class SessionConflict(Exception):
 # （真机 2026-09-22 反复反馈「明明没在操作却提示冲突」）。
 _ACTION_LABELS = {
     "login": "登录", "restore": "登录", "send_code": "发送验证码", "verify_code": "验证码登录",
-    "logout": "退出登录", "subaccounts": "子账户查询", "jump": "联登聚光", "plans": "计划查询",
-    "select_plans": "勾选计划", "prepare": "打开创建页", "fill": "填写笔记 ID",
-    "create": "创建", "create_and_publish": "一键填写并发布", "publish": "发布",
-    "preview": "页面截图", "status": "状态检查", "resume": "恢复", "show": "打开窗口", "hide": "收回窗口",
-    "prewarm": "登录页预热", "keepalive": "会话保活", "abandon": "终止任务",
+    "logout": "退出登录", "selection": "选号", "status": "状态检查", "resume": "恢复",
+    "show": "打开窗口", "hide": "收回窗口", "prewarm": "登录页预热",
+    "keepalive": "会话保活", "abandon": "终止任务",
 }
 
 

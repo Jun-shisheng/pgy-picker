@@ -1,15 +1,15 @@
 ﻿<#
-  Pgy 客户端一键出包：Python sidecar（PyInstaller）+ Tauri 安装包（NSIS）。
+  PgyPicker 客户端一键出包：Python sidecar（PyInstaller）+ Tauri 安装包（NSIS）。
 
   产物：
-    安装包  release\Pgy_<版本>_x64-setup.exe
+    安装包  release\PgyPicker_<版本>_x64-setup.exe
     内置服务 frontend\src-tauri\binaries\pgy-backend-x86_64-pc-windows-msvc.exe
 
   为什么脚本这么啰嗦：
   - 每一步都显式失败：出包脚本最怕「静默产出一个旧包」，因此任何一步失败立即终止；
   - 打包前把 PATH 收敛到当前 Python 环境：PATH 里往往混有 Git(MSYS2)、MySQL 等自带
     的 OpenSSL DLL，PyInstaller 会按 PATH 解析依赖并打进不兼容的版本，真机表现就是
-    「本机编译正常、同事电脑上 _ssl 加载失败、客户端打不开」；
+    「本机编译正常、其它电脑上 _ssl 加载失败、客户端打不开」；
   - 打包后立刻冒烟自检：用临时数据目录 + 测试端口启动内置服务并探活，
     不通就带着启动错误日志直接失败——绝不让一个跑不起来的服务进入安装包。
 #>
@@ -39,7 +39,7 @@ Assert-Command npm "请安装 Node.js 20+（https://nodejs.org）"
 
 # ---- 版本号一致性校验：安装包名 / 应用列表 / 后端自报版本必须同一口径 ----
 # 历史上这里漂过：安装包一直叫 0.1.0（脚手架初值），后端却已自报 0.3.0，
-# 用户看到「服务版本 0.3.0」和「Pgy_0.1.0_x64-setup.exe」对不上，无从判断测试的是哪版。
+# 用户看到「服务版本 0.3.0」和「PgyPicker_0.1.0_x64-setup.exe」对不上，无从判断测试的是哪版。
 $appVersion = ([regex]'"version"\s*:\s*"([^"]+)"').Match((Get-Content -LiteralPath (Join-Path $tauri 'tauri.conf.json') -Raw)).Groups[1].Value
 $cargoVersion = ([regex]'(?m)^version\s*=\s*"([^"]+)"').Match((Get-Content -LiteralPath (Join-Path $tauri 'Cargo.toml') -Raw)).Groups[1].Value
 $packageVersion = ([regex]'"version"\s*:\s*"([^"]+)"').Match((Get-Content -LiteralPath (Join-Path $root 'frontend\package.json') -Raw)).Groups[1].Value
@@ -75,7 +75,7 @@ $env:PATH = @(
 
 # 参数写成数组再展开：避免反引号续行在 Windows PowerShell 下被中文编码问题吃掉。
 # --onefile：Tauri 的 externalBin 只接收单个可执行文件；
-# --noconsole：后台服务不能让用户看到黑框，因此所有日志必须落到文件（见 mio_logging）。
+# --noconsole：后台服务不能让用户看到黑框，因此所有日志必须落到文件（见 pgy_logging）。
 $pyinstallerArgs = @(
   "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--noconsole",
   "--name", "pgy-backend-x86_64-pc-windows-msvc",
@@ -89,10 +89,10 @@ $pyinstallerArgs = @(
   "--collect-submodules", "backend",
   "--collect-all", "openpyxl"
 )
-# 报价档位默认值：从开发期的 资料和说明/报价档位.json 复制一份（gitignore，含真实价格），
-# 随 sidecar 打进安装包。装机后第一次启动用它初始化 <数据目录>/pricing.json。
+# 报价档位默认值：若仓库根有 pricing.local.json（gitignore，可含真实价格），
+# 复制一份随 sidecar 打进安装包。装机后第一次启动用它初始化 <数据目录>/pricing.json。
 $pricingDefault = Join-Path $root "backend\providers\pugongying\pricing.default.json"
-$pricingSource = Join-Path $root "资料和说明\报价档位.json"
+$pricingSource = Join-Path $root "pricing.local.json"
 if (Test-Path -LiteralPath $pricingSource) {
   Copy-Item -LiteralPath $pricingSource -Destination $pricingDefault -Force
 }

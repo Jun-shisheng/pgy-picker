@@ -3,7 +3,7 @@
     把 Pgy MCP 服务装到本机，并写好 WorkBuddy 的 MCP 配置。
 
 .DESCRIPTION
-    同事只需要双击同目录的「安装-pgy-mcp.cmd」，不需要手改任何路径。
+    使用者只需要双击同目录的「安装-pgy-mcp.cmd」，不需要手改任何路径。
 
     为什么必须由脚本生成配置、而不是直接发一份 mcp.json：
     MCP 配置里的 command 是**绝对路径**，而绝对路径里含用户名（%USERPROFILE%）、
@@ -129,7 +129,7 @@ $replaced = $servers.ContainsKey("pgy")
 $servers["pgy"] = @{ type = "stdio"; command = $targetExe; args = @() }
 $root["mcpServers"] = $servers
 
-# 必须写**无 BOM** 的 UTF-8：PowerShell 5.1 的 Set-Content -Encoding UTF8 会带 BOM，
+# 必须写**无 BOM** 的 UT：PowerShell 5.1 的 Set-Content -Encoding UTF8 会带 BOM，
 # 带 BOM 的 mcp.json 会让 WorkBuddy 解析配置失败，而且报错完全不指向这里。
 $json = $root | ConvertTo-Json -Depth 20
 [System.IO.File]::WriteAllText($ConfigPath, $json, (New-Object System.Text.UTF8Encoding $false))

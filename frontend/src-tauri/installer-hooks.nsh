@@ -7,8 +7,8 @@
 ;
 ; 当前账户只使用 `pgy://pugongying/account/default`，安装/卸载时精确清理。
 ;
-; 注意：Pgy 与姊妹项目 Ling 可能同机共存，这里**只**动 pgy 自己的东西
-; （pgy-backend / pgy:// 凭据 / Pgy 数据目录），绝不碰 Ling 的进程、凭据或数据。
+; 注意：同机可能还跑着别的本地应用，这里**只**动本产品自己的东西
+; （pgy-backend / pgy:// 凭据 / Pgy 数据目录），绝不碰其它应用的进程、凭据或数据。
 ;
 ; 注意：本文件**没有 BOM**，NSIS 会按 ANSI(GBK) 读它 —— 所以下面
 ; **只能出现 ASCII 路径**。写中文路径会被解错，指向另一个文件夹且毫无提示。
@@ -26,9 +26,9 @@
 ;   · `selection-cursor.json` —— 「换一批」翻页游标（丢了就会每次从第 1 页开始，
 ;                        两次「开始检索」可能拿到一模一样的名单）；
 ;   · `notes-cache.json`   —— 近10篇笔记点赞中位数缓存（丢了会重新打开蒲公英详情页）。
-;      ⚠️ **只保 `pricing.json` 这个 ASCII 路径**，不保备选的 `资料和说明\报价档位.json`
-;      —— 那是个中文目录名，而本文件按 ANSI(GBK) 读取、**路径只允许 ASCII**（见文件顶部）。
-;      所以装机后请把档位表放成 `%LOCALAPPDATA%\Pgy\pricing.json`，升级才不会丢。
+;      ⚠️ **只保 `pricing.json` 这个 ASCII 路径**：本文件按 ANSI(GBK) 读取、
+;      **路径只允许 ASCII**（见文件顶部）。所以装机后请把档位表放成
+;      `%LOCALAPPDATA%\Pgy\pricing.json`，升级才不会丢。
 ;
 ; 用 `move` 而不是 robocopy：整棵目录树的一次搬迁，同卷时是元数据级操作，
 ; 不会出现"搬了一半"的中间态（robocopy /MOVE 中途失败会留下两边各一半）。

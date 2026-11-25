@@ -14,16 +14,16 @@
 
 但**相似度/向量/分类器这条路在这里解决不了问题**，因为我们的目标不是
 "我们自己定义的主类"，而是**平台真正能拿来筛的东西**。平台侧只有三种
-（全部实测，见 `findings.md` F-34 / F-35 / F-38）：
+（全部实测，见 实测记录 / /）：
 
 | 通道 | 实测结论 |
 |---|---|
-| 行业树 | 只有**一级/二级能传参**；三级 179 个标签**没有参数位**（F-38） |
-| `featureTags` | 达人自带的字符串数组，实测只有 **46 种**（F-34） |
-| 笔记关键词 | 搜索框那个 free text，走同一个接口多一个 `keyword` 字段（F-35） |
+| 行业树 | 只有**一级/二级能传参**；三级 179 个标签**没有参数位**（） |
+| `featureTags` | 达人自带的字符串数组，实测只有 **46 种**（） |
+| 笔记关键词 | 搜索框那个 free text，走同一个接口多一个 `keyword` 字段（） |
 
 **判定一个映射对不对，靠的是"平台把这个词放在哪"，而不是"两个词长得像不像"。**
-实测的反例（F-38，这一条请务必读完再改这个文件）：
+实测的反例（，这一条请务必读完再改这个文件）：
 
 | 同事的词 | 平台里字面对得上的 | 平台的真实位置 | 语义 |
 |---|---|---|---|
@@ -74,7 +74,7 @@ RELATION_SCORES: dict[str, float] = {
 #
 # 现状：这一批（同事 2026-10-12 给的 7 个词）**没有一个能用行业参数筛** ——
 # 两个字面对得上但语义错，四个平台里压根没有，一个（生活vlog）通道还没接通。
-# 这不是"表没写完"，是实测出来的结论（F-38）：同事那批词更像内容风格，
+# 这不是"表没写完"，是实测出来的结论（）：同事那批词更像内容风格，
 # 不是平台的场景类目。**将来同事给别的词，就往这里加行。**
 
 TYPE_MAP: dict[str, dict] = {
@@ -86,7 +86,7 @@ TYPE_MAP: dict[str, dict] = {
         "platform_path": "母婴 / 母婴纸品 / 贵妇体验",
         "reason": "平台里只有「贵妇体验」，挂在母婴→母婴纸品下，说的是纸品消费场景，"
                   "不是「体验类内容」；而且它是三级标签，请求参数没有位置传它。",
-        "evidence": "findings F-38（2026-10-12 实测）",
+        "evidence": "findings（2026-10-12 实测）",
         "checked_at": "2026-10-12",
     },
     "亲子达人": {
@@ -98,7 +98,7 @@ TYPE_MAP: dict[str, dict] = {
         "reason": "平台里只有「亲子家庭」，挂在汽车→用车场景下，意思是「开车带娃出行」，"
                   "不是「亲子达人」。字面对得上、语义不相干 —— 真按它筛会交出"
                   "「开车带娃的人」。三级标签同样没有参数位。",
-        "evidence": "findings F-38（2026-10-12 实测）",
+        "evidence": "findings（2026-10-12 实测）",
         "checked_at": "2026-10-12",
     },
     "抽象": {
@@ -108,7 +108,7 @@ TYPE_MAP: dict[str, dict] = {
         "platform_label": "",
         "platform_path": "",
         "reason": "平台三级行业树与 46 个 featureTags 里都不存在。",
-        "evidence": "findings F-34 / F-38（2026-10-12 实测）",
+        "evidence": "findings /（2026-10-12 实测）",
         "checked_at": "2026-10-12",
     },
     "戏精": {
@@ -119,7 +119,7 @@ TYPE_MAP: dict[str, dict] = {
         "platform_path": "",
         "reason": "平台里只出现在导航菜单文案里，不是行业也不是 featureTags 标签"
                   "（实测 featureTags=[\"戏精\"] 的 total 是 0）。",
-        "evidence": "findings F-34（2026-10-12 实测）",
+        "evidence": "findings（2026-10-12 实测）",
         "checked_at": "2026-10-12",
     },
     "cos": {
@@ -129,7 +129,7 @@ TYPE_MAP: dict[str, dict] = {
         "platform_label": "",
         "platform_path": "",
         "reason": "平台三级行业树与 46 个 featureTags 里都不存在。",
-        "evidence": "findings F-34 / F-38（2026-10-12 实测）",
+        "evidence": "findings /（2026-10-12 实测）",
         "checked_at": "2026-10-12",
     },
     "活人感": {
@@ -139,7 +139,7 @@ TYPE_MAP: dict[str, dict] = {
         "platform_label": "",
         "platform_path": "",
         "reason": "平台三级行业树与 46 个 featureTags 里都不存在。",
-        "evidence": "findings F-34 / F-38（2026-10-12 实测）",
+        "evidence": "findings /（2026-10-12 实测）",
         "checked_at": "2026-10-12",
     },
     "生活vlog": {
@@ -151,7 +151,7 @@ TYPE_MAP: dict[str, dict] = {
         "reason": "平台**确实有** `vlog` 这个标签（实测出现 290 次），但我们的请求体"
                   "一直在传空的 featureTags —— 这条通道**还没接通**，"
                   "而且多标签是否真的 OR 未实测。接通前不敢让它改变检索结果。",
-        "evidence": "findings F-34（2026-10-12 实测：传 [\"vlog\"] 服务端确实筛）",
+        "evidence": "findings（2026-10-12 实测：传 [\"vlog\"] 服务端确实筛）",
         "checked_at": "2026-10-12",
     },
     # 平台标签写的是 `vlog`（没有「生活」二字），另一种常见写法一并记上。
@@ -162,7 +162,7 @@ TYPE_MAP: dict[str, dict] = {
         "platform_channel": "feature_tag",
         "platform_path": "featureTags（不是行业树）",
         "reason": "同「生活vlog」：平台有这个标签，但 featureTags 通道尚未接入检索参数。",
-        "evidence": "findings F-34（2026-10-12 实测）",
+        "evidence": "findings（2026-10-12 实测）",
         "checked_at": "2026-10-12",
     },
 }

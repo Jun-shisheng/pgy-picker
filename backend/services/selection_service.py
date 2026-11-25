@@ -19,7 +19,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from backend.core.mio_core import ROOT
+from backend.core.pgy_core import ROOT
 from backend.providers.pugongying import enrich as pgy_enrich
 from backend.providers.pugongying import login as pgy_login
 from backend.providers.pugongying import pricing
@@ -195,7 +195,7 @@ def _resolve_login(page, account: str, password: str) -> str:
     """把页面弄成登录态。返回 `"already"`（本来就登着）或 `"logged_in"`（这次登的）。
 
     **登录判定只有这一份实现**：选号链路与「账户 → 去登录」按钮都走这里，
-    免得两处各判一套、日后改一处漏一处（`CLAUDE.md` 第五条）。
+    免得两处各判一套、日后改一处漏一处（项目设计约束 第五条）。
 
     ⚠️ **区分「明确未登录」与「读不到」**：`login_status` 返回 0 表示这次没问着
     （页面刚 goto 完还没稳），不是「未登录」。把它当未登录会触发一次**多余的登录尝试**
@@ -242,7 +242,7 @@ def _note_platform_choice(page) -> None:
     它**不是检索的前置条件**（我们用页面上下文直接调检索接口，实测浮层在时
     接口照样返回 200）。但它会挡住界面，用户看到会以为流程卡住了。
     这里只**记一条日志**，不替用户选品牌 —— 选哪个品牌是业务决定，
-    `CLAUDE.md` 第七条：不猜、不替客户做业务选择。
+    项目设计约束 第七条：不猜、不替使用者做业务选择。
     """
     try:
         if page.get_by_text("请先选择合作品牌", exact=False).count():
@@ -266,7 +266,7 @@ def _ensure_ready_inner(page, account: str, password: str, role: str) -> None:
     _note_platform_choice(page)
 
     # 2026-11-23 起不再访问小红书：最后一列的中位数改从蒲公英详情页取
-    # （见 `enrich.py` 顶部与 `findings.md` F-60）。所以检索前不需要扫码。
+    # （见 `enrich.py` 顶部与 实测记录）。所以检索前不需要扫码。
 
 
 def _login_only_inner(page, account: str, password: str, role: str) -> dict:
@@ -284,7 +284,7 @@ def ensure_ready(role: str = DEFAULT_ROLE) -> None:
     if credentials is None:
         raise NotReady(
             "没有可用的蒲公英账号凭据。请把账号密码放进系统凭据管理器"
-            "（开发期可放 资料和说明/账号密码.txt，首次运行会自动导入）。")
+            "（开发期可放数据目录下的 account.seed.txt，首次运行会自动导入）。")
     account, password = credentials
     progress.begin(progress.LOGIN, "正在确认登录态（需要时会在浏览器窗口里登录）…")
     pgy_session.run_with_page(_ensure_ready_inner, account, password, role)
@@ -319,12 +319,12 @@ def classify_terms(terms: list[str], *,
 
     ⚠️ **这里原来还有一档 `overlap`（≥2 个连续汉字就算"像"），已删除。**
     它正是「抽象 → 亲子」这类无逻辑映射的来源 —— 详见 `type_map.py` 顶部的说明
-    与 `findings.md` F-39：平台的行业树**根本没有**那些词，而字面对得上的
+    与 实测记录：平台的行业树**根本没有**那些词，而字面对得上的
     「亲子家庭 / 贵妇体验」挂在汽车、母婴纸品下面，语义完全是另一回事。
 
     拒绝映射**不等于把词丢掉**：它降级为笔记关键词继续起作用，同时把
     `reason` / `evidence` 记进明细与运行日志 —— 判断是隐性的（界面不摆），
-    但事后必须查得出来（`CLAUDE.md` 第九条）。
+    但事后必须查得出来（项目设计约束 第九条）。
 
     行业清单取不到时（没登录 / 没快照）**不抛异常**：映射表是静态的，它的判定
     仍然有效，只是"与平台正式名完全相同"那条路径失去依据 —— 明细里如实标注来源。
@@ -517,14 +517,14 @@ def search(params: SearchParams, *, per_tier: int = 20,
     平台侧会按它筛；本地 `build_gate()` 再核对一次 `location` 字段，
     万一平台忽略了这个参数，名单也不会混进外地人。
 
-    ## 为什么改成「按档位逐个问平台」（2026-10-13，findings F-40）
+    ## 为什么改成「按档位逐个问平台」（2026-10-13，findings）
 
     原来是**拉回一整页（什么粉丝量的人都有）再在本地剔**。平台的排序是
     `comprehensiverank`，高量级的达人在这个序里本来就稀疏 ⇒ 超头部那几档
     **永远靠碰运气**：实测 40w-50w 只收到 3 条、30w-40w 7 条、20w-30w 9 条，
     而用户的要求是**每档必 20，硬性**。
 
-    现在把粉丝量区间**发给平台**（`fansNumberLower`/`fansNumberUpper`，F-40 实测：
+    现在把粉丝量区间**发给平台**（`fansNumberLower`/`fansNumberUpper`， 实测：
     40w-50w 这一档单独就有 **2150** 人），于是每一档变成"在一个**稠密**的池子里取 20 条"——
     档位不再需要靠碰。
 
@@ -537,7 +537,7 @@ def search(params: SearchParams, *, per_tier: int = 20,
     2. **预算**：按「对应档位基准价 × 倍数」算上限，图文/视频任一在预算内即通过。
 
     平台侧的区间现在**已经替我们挡掉大部分**，本地这两道变成兜底 ——
-    但**必须留着**：万一哪天平台又把这个参数悄悄忽略掉（F-40 里另外四种写法就是
+    但**必须留着**：万一哪天平台又把这个参数悄悄忽略掉（ 里另外四种写法就是
     被静默忽略的），本地把关还在，交出去的名单就不会错。
 
     ## 兜底：检索词凑不满的档位，**不带检索词**再翻一遍
@@ -597,7 +597,7 @@ def search(params: SearchParams, *, per_tier: int = 20,
         index = tier_index(item.get("fansNum"))
         return labels[index] if 0 <= index < len(labels) else "档位外"
 
-    # 关键词（findings F-35）：一个请求只能带一个，所以多关键词要**逐个搜再合并**。
+    # 关键词（findings）：一个请求只能带一个，所以多关键词要**逐个搜再合并**。
     # 名额计数与"已收过的人"必须跨关键词共享 —— 否则每个关键词都各自去凑 20 条，
     # 收出好几倍的量；而且同一个人命中多个关键词时会被重复计入，
     # 变相等于"命中多个提高了优先级"（用户明确说过不该这样）。
@@ -701,14 +701,14 @@ def search(params: SearchParams, *, per_tier: int = 20,
             # ── 兜底：检索词在这一档里**全跑完了还是不够** ⇒ 不带检索词再翻这一档 ──
             #
             # 为什么必须兜底（2026-10-13 实测）：**"整档的人"远多于"命中检索词的人"**。
-            # 40w-50w 不带检索词时整档 2150 人（F-40），可一挂上检索词就只剩几十
+            # 40w-50w 不带检索词时整档 2150 人（），可一挂上检索词就只剩几十
             # （实测：'体验' 15 人、'活人感' 0 人、另有一个词 34 人）——
             # 再怎么翻也到不了 30，界面就一直报"这一档没凑满"。
             #
             # ⚠️ **代价必须记住：兜底收进来的人不保证命中检索词。**
             # 这是用户 2026-10-13 拍板接受的取舍 —— 「每个量级必凑满」优先于
             # 「只收命中检索词的人」。所以这件事**必须留痕**：进 stats.keyword_fallback
-            # 与运行日志，交出去的名单事后查得出来哪几条是补的（CLAUDE.md 第九条）。
+            # 与运行日志，交出去的名单事后查得出来哪几条是补的（项目设计约束 第九条）。
             if with_terms and budget > 0 and counts.get(tier_key, 0) < targets[tier_key]:
                 before = counts.get(tier_key, 0)
                 log.info("档位 %s：检索词全跑完只有 %s 条（目标 %s），不带检索词再翻这一档…",
@@ -785,7 +785,7 @@ def search(params: SearchParams, *, per_tier: int = 20,
         "keywords": [k for k in todo if k],
         "pages_per_keyword": per_combo_pages,
         # 哪些档位动用了「不带检索词」的兜底、各补进来几条。**这份名单必须有据可查**：
-        # 那些人不保证命中检索词，事后要能说清名单里哪几条是补的（CLAUDE.md 第九条）。
+        # 那些人不保证命中检索词，事后要能说清名单里哪几条是补的（项目设计约束 第九条）。
         "keyword_fallback": fallback_gained,
         # 补充主页数据的成功/失败计数（详情接口、小红书主页）。
         "enrichment": enrichment,
@@ -880,7 +880,7 @@ def apply_terms(params: SearchParams, terms: list[str] | None) -> tuple[SearchPa
     我们自己程序有判断」）—— 界面上不弹确认、不摆分类结果。
 
     但判断明细**必须返回出去并记账**：猜错了要能事后查出来。
-    这是本项目一贯的规矩（`CLAUDE.md` 第九条：每个字段都要能指回出处），
+    这是本项目一贯的规矩（项目设计约束 第九条：每个字段都要能指回出处），
     也是用户自己要的「设置里能有日志给我们开发检查」。
 
     冲突处置：**下拉里显式选过行业就听它的** —— 人不该被程序猜的结果覆盖。
@@ -920,7 +920,7 @@ def apply_terms(params: SearchParams, terms: list[str] | None) -> tuple[SearchPa
     else:
         keywords = [i["term"] for i in items]
 
-    # 判断明细**必须留痕**：界面不摆这些（F-37 定的"隐性"），所以日志是唯一的出口。
+    # 判断明细**必须留痕**：界面不摆这些（ 定的"隐性"），所以日志是唯一的出口。
     # 哪天名单看着不对，先来这里看它当时把哪个词当成了什么、为什么。
     for item in items:
         if item["kind"] == "keyword" and item["match"] != "no_path":
@@ -940,7 +940,7 @@ def run_selection(params: SearchParams, *, per_tier: int = 20, mode: str = "fres
 
     **这是唯一的实现**：同步接口 `POST /api/selection/run` 与「启动即返回」的
     `POST /api/selection/start` 都走这里（后者只是把它丢到后台线程），
-    免得两条路各写一套编排（`CLAUDE.md` 第五条）。
+    免得两条路各写一套编排（项目设计约束 第五条）。
 
     进度与失败原因**就地**写进 `progress`，HTTP 层只负责把异常翻成错误码 ——
     这样 MCP 那条"启动完就返回、稍后查进度"的路才拿得到结果与停在哪一步。
@@ -974,7 +974,7 @@ def login_now(role: str = DEFAULT_ROLE) -> dict:
     """「账户 → 去登录」按钮的入口：**只登录**，不碰检索页。
 
     登录在那个**屏幕上看得见的浏览器窗口**里跑，人机验证由人在窗口里完成
-    （`CLAUDE.md` 第二、三条：不实现任何绕过）。所以这个调用可能挂着好几分钟，
+    （项目设计约束 第二、三条：不实现任何绕过）。所以这个调用可能挂着好几分钟，
     界面要如实说明「正在等你在浏览器里完成验证」。
     """
     credentials = credential_service.load()

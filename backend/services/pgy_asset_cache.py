@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from backend.core.mio_core import ROOT
+from backend.core.pgy_core import ROOT
 
 # 只有带内容哈希的静态资源才缓存：URL 内容不可变，缓存永远不会过期失效。
 _HASHED_ASSET = re.compile(r"\.[0-9a-fA-F]{8,}\.(?:js|css|woff2?|ttf|otf|png|jpe?g|webp|gif|svg)$")

@@ -1,4 +1,4 @@
-# ── 项目规则：只推代码，不推安装包与本地数据（CLAUDE.md 第八条）──────────────
+# ── 项目规则：只推代码，不推安装包与本地数据 ──────────────────────────────
 
 # 打包产物
 release/
@@ -59,7 +59,7 @@ notes-cache.json
 # 报价配置：商业敏感，绝不入库（真实价格由使用者自行放置，
 # 仓库里只有 backend/providers/pugongying/pricing.example.json 这个无真实价格的样板）
 pricing.json
-# 打包时从 资料和说明/报价档位.json 复制进来、随 sidecar 打进安装包的默认档位。
+# 打包时从仓库根的 pricing.local.json 复制进来、随 sidecar 打进安装包的默认档位。
 # 含真实价格，绝不入库。
 backend/providers/pugongying/pricing.default.json
 
@@ -84,8 +84,25 @@ build/Pgy-*.ico
 # 一次性探针脚本（常带具体达人样本 uid，仅本机调试用；已入库的历史探针不受影响）
 build/probe_*.py
 
+# ── 内部资料（开源版不发布；仅本机留存）──────────────────────────
+# 项目内部文档：开发记录、决策、业务规格、字段字典、管理层材料。
+findings.md
+CHANGELOG.md
+CLAUDE.md
+task_plan.md
+docs/
+
+# 一次性探针/诊断脚本（常带具体样本 uid，仅本机调试用）
+build/probe_*.py
+build/try_*.py
+build/_diag_*.py
+
 # 客户材料与公司报价（商业敏感，绝不入库）
 资料和说明/
+
+# 开发期本地凭据种子与报价配置（自行创建，绝不入库）
+account.seed.txt
+pricing.local.json
 
 # 凭据与配置
 .env

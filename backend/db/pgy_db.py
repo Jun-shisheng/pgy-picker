@@ -1,8 +1,8 @@
 """本地 SQLite 存储层：连接工厂、建库与迁移。
 
-承载「账号元数据」表 `local_accounts`。选号任务/快照仍走 `mio_core` 的 JSON 存储
+承载「账号元数据」表 `local_accounts`。选号任务/快照仍走 `pgy_core` 的 JSON 存储
 （渐进迁移，不推倒重写）。**密码等敏感凭据不进本库**，统一由
-`mio_credential.CredentialStore` 交给 Windows Credential Manager。
+`pgy_credential.CredentialStore` 交给 Windows Credential Manager。
 
 本模块不依赖 GUI / 队列 / 浏览器，可独立测试。
 """
@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from backend.core.mio_core import ROOT
+from backend.core.pgy_core import ROOT
 
 DB_PATH = ROOT / "pgy.db"
 

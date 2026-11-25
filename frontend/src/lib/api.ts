@@ -63,7 +63,7 @@ export interface AreasResponse {
   source: "live" | "cache";
 }
 
-/** 交付表的一行。键就是客户最新模板那 10 列（2026-11-10 起，11-16 加「小红书号」）。 */
+/** 交付表的一行。键就是交付模板那 10 列（2026-11-10 起，11-16 加「小红书号」）。 */
 export type BloggerRow = Record<string, string | number | null>;
 
 export interface SelectionRunRequest {

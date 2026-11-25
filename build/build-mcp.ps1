@@ -89,7 +89,7 @@ Copy-Item -LiteralPath $bundled -Destination $handout -Force
 Write-Host ("      交付 exe：{0}" -f $handout)
 
 # 生成交付用的 mcp.json（与 exe 同目录，一起发给同事）。
-# **必须写无 BOM 的 UTF-8**：PowerShell 5.1 的 `Set-Content -Encoding UTF8` 会带
+# **必须写无 BOM 的 UT**：PowerShell 5.1 的 `Set-Content -Encoding UTF8` 会带
 # BOM，带 BOM 的 mcp.json 会让 WorkBuddy 解析配置失败，而且报错信息完全不指向
 # 这里——是那种最费时间的坑。
 $json = @"

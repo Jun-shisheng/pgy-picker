@@ -6,7 +6,7 @@
 存一份快照，界面至少能先把选项显示出来。
 
 **刷新时机只有一个：活取成功时顺手写。** 不后台轮询、不为了刷缓存去启动浏览器
-——那会白白多打平台的接口（`CLAUDE.md` 第二、三条）。
+——那会白白多打平台的接口（项目设计约束 第二、三条）。
 
 放在 `ROOT` 下而不是数据目录：开发态 `ROOT` 就是仓库根，与 `settings.json` 同级。
 ⚠️ 因此它**必须在 `.gitignore` 里**，否则本机运行数据会被提交进仓库。
@@ -19,7 +19,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from backend.core.mio_core import ROOT, _atomic_write
+from backend.core.pgy_core import ROOT, _atomic_write
 
 log = logging.getLogger("pgy.industry_cache")
 

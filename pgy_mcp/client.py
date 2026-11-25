@@ -3,10 +3,8 @@
 只做三件事：拼 URL、把错误码翻译成可读的异常、在服务重启后重新探测端口。
 **不做任何业务判断**——流程语义全在 backend 里，这里猜就是重复实现。
 
-超时口径与后端一致（backend/providers/spotlight/mio_partner.py 的
-CALL_TIMEOUT_SECONDS / LONG_ACTIONS）：查询类动作后端 300 秒快速失败线，
-纯本地读取（不碰浏览器）几十毫秒就回。客户端比后端多留 10 秒，避免两边
-掐着同一个数字互相超时。
+超时口径与后端一致：碰浏览器的动作后端 300 秒快速失败线，纯本地读取（不碰浏览器）
+几十毫秒就回。客户端比后端多留 10 秒，避免两边掐着同一个数字互相超时。
 """
 
 from __future__ import annotations
@@ -22,7 +20,7 @@ __all__ = ["PgyClient", "PgyError", "BROWSER_READ_TIMEOUT_SECONDS", "LOCAL_READ_
 
 # 后端对「碰浏览器的非长任务」的快速失败线是 300 秒，客户端留 10 秒余量。
 BROWSER_READ_TIMEOUT_SECONDS = 310.0
-# 纯本地读取（会话快照、账号列表、留痕）：不碰浏览器，几十毫秒级。
+# 纯本地读取（会话快照、账号列表、运行日志）：不碰浏览器，几十毫秒级。
 LOCAL_READ_TIMEOUT_SECONDS = 30.0
 
 
@@ -65,10 +63,9 @@ class PgyClient:
                 retry_safe: bool = False) -> dict:
         """发一次请求。连接层失败（服务重启/端口换了）时最多重探一次。
 
-        `retry_safe` 只对**重复执行无害**的调用为 True（读、查询、截图）。
-        写操作（真的会建计划/投创意）绝不重放——后端自己也立了同样的规矩
-        （app.py 里 `create_and_publish` 不走「窗口没了就静默重试」的自愈链路），
-        重放的代价是平台上多投一次。
+        `retry_safe` 只对**重复执行无害**的调用为 True（读、查询、进度）。
+        会改变状态的操作（启动选号、登录）绝不自动重放——重放的代价可能是平台侧
+        多跑一轮检索，或凭空多开一次登录。默认一律不重放。
         """
         try:
             return self._send(method, path, body, timeout)
@@ -76,7 +73,7 @@ class PgyClient:
             if not retry_safe:
                 raise PgyError(
                     "本地服务连接中断。若 Pgy 客户端刚被重启，请重试；"
-                    "写操作不会自动重放，避免重复投放。",
+                    "会改变状态的操作不会自动重放。",
                     code="TRANSPORT_DOWN", status=0, retryable=True) from None
             self.forget()
             try:

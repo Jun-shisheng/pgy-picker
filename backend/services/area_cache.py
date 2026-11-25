@@ -5,7 +5,7 @@
 选号页的地域下拉会是空的 —— 存一份快照，至少先把选项显示出来。
 
 **刷新时机只有一个：活取成功时顺手写。** 不后台轮询、不为了刷缓存去启动浏览器
-（`CLAUDE.md` 第二、三条）。
+（项目设计约束 第二、三条）。
 
 放在 `ROOT` 下，**必须在 `.gitignore` 里**（与行业缓存同理）。
 """
@@ -17,7 +17,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from backend.core.mio_core import ROOT, _atomic_write
+from backend.core.pgy_core import ROOT, _atomic_write
 
 log = logging.getLogger("pgy.area_cache")
 

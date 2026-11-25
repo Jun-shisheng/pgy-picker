@@ -27,8 +27,8 @@ PROBE_TIMEOUT_SECONDS = 2.0
 
 # /api/health 的固定应答（backend/app.py:health）。用它验明身份，两个词都要在，
 # 与 Rust 侧 probe_backend_identity 的判据保持一致（同时含 service 与 pgy）。
-# 刻意用 "pgy" 而不是参考项目的 "playwright"：Ling 与本项目可能装在同一台机器上，
-# 判据必须能区分二者，否则会对着别人的后端报错。
+# 判据用 "pgy" 而不是泛泛的 "playwright"：机器上可能同时跑着别的浏览器自动化服务，
+# 必须能区分，否则会对着别人的后端报错。
 IDENTITY_MARKERS = ("service", "pgy")
 
 

@@ -1,7 +1,8 @@
-"""蒲公英账号凭据：**只进 Windows 凭据管理器**（`CLAUDE.md` 第四条）。
+"""蒲公英账号凭据：**只进 Windows 凭据管理器**（项目设计约束 第四条）。
 
-开发期允许从 `资料和说明/账号密码.txt` **一次性导入**，导入后即由凭据管理器保管；
-此后任何代码路径都不再读那个文件。凭据**不打印、不落库、不进日志**。
+开发期允许从数据目录下的 `account.seed.txt` **一次性导入**，导入后即由凭据管理器保管；
+此后任何代码路径都不再读那个文件。该文件只用于本地开发，**不要提交、不要分发**。
+凭据**不打印、不落库、不进日志**。
 """
 
 from __future__ import annotations
@@ -10,14 +11,14 @@ import logging
 import re
 from pathlib import Path
 
-from backend.core.mio_core import ROOT
-from backend.services.mio_credential import CredentialStore, redact
+from backend.core.pgy_core import ROOT
+from backend.services.pgy_credential import CredentialStore, redact
 
 log = logging.getLogger("pgy.credential")
 
 PLATFORM = "pugongying"
 DEFAULT_ACCOUNT_ID = "default"
-SEED_FILE = ROOT / "资料和说明" / "账号密码.txt"
+SEED_FILE = ROOT / "account.seed.txt"
 
 _store = CredentialStore()
 

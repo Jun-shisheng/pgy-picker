@@ -20,7 +20,7 @@ import json
 import logging
 from pathlib import Path
 
-from backend.core.mio_core import ROOT
+from backend.core.pgy_core import ROOT
 
 log = logging.getLogger("pgy.settings")
 
@@ -30,7 +30,7 @@ SETTINGS_FILE = ROOT / "settings.json"
 #: ⚠️ **刻意用 ASCII 名，别改成中文**：`installer-hooks.nsh` 要在 NSIS 里写同一个
 #: 路径，而无 BOM 的 .nsh 会被 NSIS 按 ANSI(GBK) 解码 —— 中文路径字面量会被解错，
 #: 于是"挪开再挪回来"挪的是另一个文件夹，用户的交付物**照样被删且毫无提示**。
-#: 要改成中文，得先把那个文件转成 UTF-8 with BOM，并**真格跑一次升级安装**验证。
+#: 要改成中文，得先把那个文件转成 UT with BOM，并**真格跑一次升级安装**验证。
 EXPORT_DIR_NAME = "exports"
 
 

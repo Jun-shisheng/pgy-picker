@@ -6,9 +6,10 @@
 
 在整套工具里的层次位置：
 
-    backend/app.py        本地 FastAPI：浏览器动作白名单、会话状态机、留痕
+    backend/app.py        本地 FastAPI：浏览器动作白名单、会话状态机、运行日志
     pgy_mcp/*            本包，只做「HTTP ⇄ MCP 工具」的翻译
-    WorkBuddy             外部 Agent，作为 MCP Client 调用这里的工具
+    WorkBuddy             外部 Agent，作为 MCP Client 调用这里的工具（任何支持
+                           stdio MCP 的客户端都可以接）
 
 刻意只用标准库（json / urllib / sys），理由：
 - 打包成 onefile exe 后体积小、启动快——WorkBuddy 每开一个新会话都会把它拉起来；

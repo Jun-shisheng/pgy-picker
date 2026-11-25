@@ -84,7 +84,7 @@ def _blogger(**overrides) -> dict:
         "videoPrice": 4500,
         "name": "某达人",
         "userId": "u1",
-        "redId": "49321476371",
+        "redId": "123456789",
         "location": "浙江 杭州",
         "contentTags": [{"taxonomy1Tag": "母婴"}],
         "featureTags": ["vlog"],
@@ -133,14 +133,10 @@ def test_positive_daily_interaction_median_passes():
 
 
 def test_xiaohongshu_id_comes_from_red_id_not_user_id():
-    """「小红书号」= 详情页昵称下方那串数字（`redId`），**不是** 24 位内部 `userId`。
-
-    用户 2026-11-16 要求把它加在昵称与粉丝量之间；客户截图上的
-    「小红书号：49321476371」就是 `redId`。
-    """
+    """「小红书号」= 详情页昵称下方那串数字（`redId`），**不是** 24 位内部 `userId`。"""
     row = map_blogger(_blogger())
 
-    assert row["小红书号"] == "49321476371"
+    assert row["小红书号"] == "123456789"
     assert row["小红书号"] != "u1", "不能拿 userId 顶替"
 
 
@@ -177,7 +173,7 @@ def test_drop_counters_are_reported_separately():
 
 
 def test_type_includes_all_content_and_feature_tags():
-    """类型不能只取第一个 —— 用户实测 AvaFoo 有 4 个标签，我们只回了 2 个。
+    """类型不能只取第一个 —— 实测示例达人有 4 个标签，不能只回 2 个。
 
     contentTags = [影视综资讯, 时尚]，featureTags = [ootd, 测评]
     → 交付表「类型」必须是这 4 个，按原顺序、空格分隔。

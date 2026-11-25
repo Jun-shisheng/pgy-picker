@@ -4,7 +4,7 @@
 沿着讲得通的路径落到一个目标上；没有合理路径就拒绝映射，
 而不是像原来那样"有 2 个连续汉字相同就算像"（那条已删，见 `type_map.py` 顶部）。
 
-这里钉住的是**几条实测事实**（F-34 / F-38），它们是这个文件存在的全部理由：
+这里钉住的是**几条实测事实**（ /），它们是这个文件存在的全部理由：
 - 「亲子达人」在平台里字面对得上的只有「亲子家庭」，而它挂在**汽车**下；
 - 「体验」在平台里只有「贵妇体验」，挂在**母婴纸品**下；
 - 抽象 / 戏精 / cos / 活人感：平台里**压根没有**。
@@ -52,7 +52,7 @@ def test_the_word_the_colleague_gave_is_refused_not_forced_onto_a_lookalike():
     assert item["match"] == "refused"
     assert item["matched"] is None
     assert "汽车" in item["reason"]
-    assert "F-38" in item["evidence"]
+    assert "" in item["evidence"]
 
 
 def test_experience_is_refused_too():

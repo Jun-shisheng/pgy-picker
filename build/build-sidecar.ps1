@@ -43,10 +43,10 @@ $pyinstallerArgs = @(
   "--collect-submodules", "backend",
   "--collect-all", "openpyxl"
 )
-# 报价档位默认值：从开发期的 资料和说明/报价档位.json 复制一份（gitignore，含真实价格），
-# 随 sidecar 打进安装包。装机后第一次启动用它初始化 <数据目录>/pricing.json。
+# 报价档位默认值：若仓库根有 pricing.local.json（gitignore，可含真实价格），
+# 复制一份随 sidecar 打进安装包。装机后第一次启动用它初始化 <数据目录>/pricing.json。
 $pricingDefault = Join-Path $root "backend\providers\pugongying\pricing.default.json"
-$pricingSource = Join-Path $root "资料和说明\报价档位.json"
+$pricingSource = Join-Path $root "pricing.local.json"
 if (Test-Path -LiteralPath $pricingSource) {
   Copy-Item -LiteralPath $pricingSource -Destination $pricingDefault -Force
 }

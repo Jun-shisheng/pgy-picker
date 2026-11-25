@@ -1,4 +1,4 @@
-"""关键词检索（findings F-35）。
+"""关键词检索（findings）。
 
 链路的由来：平台检索页那个搜索框（placeholder「按笔记关键词找博主」）打的
 **就是我们一直在用的同一个接口**，只是多带一个 `keyword` 字段。
@@ -31,7 +31,7 @@ def test_body_carries_the_keyword_only_when_present():
 def test_body_carries_the_fans_range_only_when_set():
     """粉丝区间同理：**不限时不带这两个键**（平台界面自己不设区间时也不发）。
 
-    形状是驱动界面抓包得到的（findings F-40）：`fansNumberLower` / `fansNumberUpper`
+    形状是驱动界面抓包得到的（findings）：`fansNumberLower` / `fansNumberUpper`
     两个**平铺**的整数键。别照界面保存的 `fansCount` 去构造 —— 那四种写法实测被忽略。
     """
     assert "fansNumberLower" not in SearchParams().to_body()
@@ -218,7 +218,7 @@ def test_the_fallback_is_skipped_when_there_were_no_keywords_at_all(monkeypatch)
 
 
 def test_each_tier_query_carries_its_own_fans_range(monkeypatch):
-    """**每个档位的查询都带上它自己的粉丝区间**（findings F-40）。
+    """**每个档位的查询都带上它自己的粉丝区间**（findings）。
 
     这是"每档必 20"的全部依据：不带区间时平台按综合排序返回各种粉丝量的人，
     高量级在里面稀疏，本地再剔 ⇒ 超头部永远凑不满（实测只有 3 条）。

@@ -9,8 +9,7 @@ use tauri_plugin_shell::ShellExt;
 
 /// 本地服务端口。必须与 backend_sidecar.py 的 DEFAULT_PORT 和前端 API_BASE 保持一致。
 ///
-/// **刻意与姊妹项目 Ling 的 18080 错开**：两个产品可能装在同一台机器上（同一个投放团队），
-/// 端口撞了会互相抢后端。
+/// **刻意避开常见的 18080**：机器上可能同时跑着别的本地服务，端口撞了会互相抢后端。
 const BACKEND_PORT: u16 = 18081;
 /// 等待本地服务就绪的上限。onefile 打包的 sidecar 首次启动要解压上百 MB，
 /// 叠加杀毒软件扫描时可能接近一分钟，因此这里给足余量。
@@ -28,7 +27,7 @@ struct BackendProcess(Mutex<Option<CommandChild>>);
 // 「客户端根本没起来」和「服务起来了但操作失败」这两类完全不同的故障。
 
 fn pgy_data_dir() -> PathBuf {
-    // 先认 PGY_DATA_DIR，与 Python 侧（mio_core.ROOT）同一套规则。
+    // 先认 PGY_DATA_DIR，与 Python 侧（pgy_core.ROOT）同一套规则。
     // 不这样做的话开发态会分家：run-dev.bat 把 PGY_DATA_DIR 指到项目根，
     // 后端日志写项目里，而本壳的 desktop.log 写 %LOCALAPPDATA%，
     // 于是「打开日志目录」打开的是个空目录 —— 恰好是开发时最需要它的场合。
@@ -255,8 +254,8 @@ fn port_owners(port: u16) -> Vec<u32> {
 /// 端口被占用时，先问一句「你是不是本程序的后端」：GET /api/health，
 /// 响应里带 `service`/`pgy` 这两个只有我们后端才有的字段才认。
 ///
-/// 用 `pgy` 而不是参考项目的 `playwright`：Ling 与本项目可能同机共存，
-/// 判据必须能把两者区分开。
+/// 判据用 `pgy` 而不是泛泛的 `playwright`：机器上可能同时跑着别的浏览器自动化服务，
+/// 必须能把它们区分开。
 /// 通知后端**优雅收尾**：把自动化页切回 PGY 首页、停 Playwright 驱动。
 ///
 /// **不关浏览器**（用户 2026-11-10 要求）；只结束自动化接管。

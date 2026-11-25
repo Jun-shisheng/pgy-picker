@@ -128,7 +128,7 @@ def test_start_passes_arguments_through_and_returns_immediately():
 def test_start_leaves_the_mode_default_to_the_backend():
     """**MCP 不替后端定"默认取哪一批"** —— 不传 `mode`，由业务内核自己决定。
 
-    这正是 CLAUDE.md 第五条说的"在 MCP 里猜业务就是重复实现"：以前这里写死了
+    这正是 项目设计约束 第五条说的"在 MCP 里猜业务就是重复实现"：以前这里写死了
     `"next" if ... else "fresh"`，后端把默认改成 `next` 之后它就漂了。
     """
     client = FakeClient({"/api/selection/start": {"started": True}})

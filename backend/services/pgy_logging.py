@@ -29,7 +29,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from backend.core.mio_core import LOG_DIR, ROOT
+from backend.core.pgy_core import LOG_DIR, ROOT
 
 LOG_FILE_NAME = "pgy.log"
 RING_CAPACITY = 5000
@@ -363,7 +363,7 @@ def browser_environment() -> dict[str, Any]:
     Playwright 自带内核。只报告结论，不启动浏览器：真实的启动失败原因由
     登录/操作时的异常日志给出。
     """
-    from backend.services import mio_system_browser
+    from backend.services import pgy_system_browser
 
     info: dict[str, Any] = {"engine": "", "path": "", "available": False, "playwright": False,
                             "detail": "", "mode": ""}
@@ -374,7 +374,7 @@ def browser_environment() -> dict[str, Any]:
         info["detail"] = f"Playwright 未安装：{exc}"
         return info
 
-    report = mio_system_browser.browser_report()
+    report = pgy_system_browser.browser_report()
     info["mode"] = report.get("mode", "")
     if report.get("available"):
         info.update(engine=os.path.basename(str(report.get("path") or "")),

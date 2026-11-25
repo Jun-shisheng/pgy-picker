@@ -1,6 +1,6 @@
 """补齐交付表里「搜索接口拿不到」的两列。
 
-客户最新模板（`资料和说明/最新模板/ai需求.xlsx`，2026-11-10；2026-11-16 加「小红书号」）要 10 列：
+交付模板（2026-11-10 定稿；2026-11-16 加「小红书号」）要 10 列：
 
 | 列 | 来源 | 为什么不能只用搜索接口 |
 |---|---|---|
@@ -10,7 +10,7 @@
 
 **2026-11-23 变更（用户拍板）**：中位数不再打开小红书主页，改从**蒲公英自己的详情页**取。
 
-原因：小红书从 2026-11-10 起把匿名看主页改成「先登录」（`findings.md` F-48），
+原因：小红书从 2026-11-10 起把匿名看主页改成「先登录」（实测记录），
 补主页会不断触发风控、还要人反复扫码。蒲公英详情页本身就带「日常笔记 / 笔记案例」
 的逐篇点赞数，而且**就在已经登录的蒲公英域内**，完全不需要碰小红书。
 
@@ -20,14 +20,14 @@
   蒲公英接口不返回「置顶」标记，所以不再做置顶排除；低频达人的 30 天窗口可能
   不足 10 篇，此时用「笔记案例」的最新 8 篇补齐，仍不足 10 篇就按实际篇数算。
 
-边界（`CLAUDE.md` 第一、二、三、七条）：
+边界（项目设计约束 第一、二、三、七条）：
 
 - **只读**：只导航蒲公英详情页、只读页面自己发的 GET 响应；不点赞、不关注、不评论、不私信；
 - **域名收窄**：只打 `pgy.xiaohongshu.com`，**不再访问 `www.xiaohongshu.com`**；
 - **节流**：每次详情请求、每次详情页导航都先过统一节流器；
 - **不合成签名**：平台的 `notes_rate` / `notes_detail` 需要页面自己的 `x-s` 签名头，
   直连会 406。**不实现签名算法**，而是让浏览器正常打开详情页、页面自己发请求，
-  我们只旁听响应（`findings.md` F-60）；
+  我们只旁听响应（实测记录）；
 - **撞上人机验证就停**：由 `NotesBlocked` 上报，**不实现任何绕过**。
 
 ⚠️ 点赞数来自蒲公英接口的 `likeNum`，是平台统计值（通常比主页展示的缩写更精确）。
@@ -45,7 +45,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from backend.core.mio_core import ROOT
+from backend.core.pgy_core import ROOT
 from backend.services.throttle import Throttle
 
 log = logging.getLogger("pgy.pugongying.enrich")
@@ -178,7 +178,7 @@ def median_of(values: Iterable[int]) -> int | None:
     """中位数（偶数个取中间两个的平均，**四舍五入**到整数）。空集合返回 None。
 
     ⚠️ 用 `floor(x + 0.5)` 而不是 Python 的 `round()`：`round(2.5) == 2`
-    （银行家舍入），客户看到会以为算错了。
+    （银行家舍入），使用者看到会以为算错了。
     """
     numbers = sorted(int(v) for v in values)
     if not numbers:
@@ -279,7 +279,7 @@ def read_recent_notes(page, user_id: str,
 
     为什么不直接在页面里 fetch：
     - `notes_rate` / `notes_detail` 需要平台页面的 `x-s` / `x-t` 签名头，直连返回 406；
-    - 按 `CLAUDE.md`「不绕风控」，**不实现签名算法**；
+    - 按 项目设计约束「不绕风控」，**不实现签名算法**；
     - 让浏览器正常打开详情页，页面按它自己的方式请求，我们只读响应 —— 与人在看页面一致。
 
     一次导航会触发 `notes_rate`（日常笔记，通常 15 篇）与 `notes_detail`

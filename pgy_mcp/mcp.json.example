@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "ling": {
+    "pgy": {
       "type": "stdio",
-      "command": "C:\\Users\\<用户名>\\AppData\\Local\\LingMCP\\ling-mcp.exe",
+      "command": "C:\\Users\\<用户名>\\AppData\\Local\\PgyMCP\\pgy-mcp.exe",
       "args": []
     }
   }

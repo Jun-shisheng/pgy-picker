@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("PGY_DATA_DIR", str(ROOT))
 
-from backend.services import mio_system_browser as sb  # noqa: E402
+from backend.services import pgy_system_browser as sb  # noqa: E402
 
 PROFILE_DIR = ROOT / "profiles" / "pugongying"
 OUR_HOST = "pgy.xiaohongshu.com"

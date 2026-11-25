@@ -1,14 +1,14 @@
 """Pgy 本地服务（FastAPI）。
 
 **这是本产品唯一的业务内核。** React 前端与 `pgy_mcp` 都是薄客户端，只通过这里的
-HTTP 接口说话 —— 业务语义不允许在客户端或 MCP 层复制一份（见 `CLAUDE.md` 第五条）。
+HTTP 接口说话 —— 业务语义不允许在客户端或 MCP 层复制一份（见 项目设计约束 第五条）。
 
-边界（`CLAUDE.md` 第一、二条）：
+边界（项目设计约束 第一、二条）：
 - 对蒲公英平台**只读**：本服务不提供任何邀约 / 建合作 / 评论 / 私信之类的写操作接口；
 - 浏览器只借用不接管，人机验证由人在可见窗口里处理。
 
-M0 阶段只暴露最小面：健康握手 + 会话桩 + 前端错误上报。
-筛号、采集、导出等接口按 `docs/03-基础设计说明书.md` §6 逐步加入。
+对外接口分三组：健康握手与会话管理、蒲公英达人检索与采集、Excel 导出。
+前端与 MCP 都只调用这些接口，不自己拼业务。
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from backend.services import mio_logging
+from backend.services import pgy_logging
 
 log = logging.getLogger("pgy.app")
 
@@ -33,7 +33,7 @@ class OperationHttpError(HTTPException):
     """带机器码的错误信封。
 
     `detail` 一律是**写给人看的中文**，客户端与 MCP 直接透传、不要二次加工 ——
-    重写文案会让排障时对不上日志（参考项目的教训）。
+    重写文案会让排障时对不上日志。
     """
 
     def __init__(self, status: int, code: str, message: str,
@@ -142,7 +142,7 @@ class AccountUpsert(BaseModel):
     """录入/更新蒲公英账号。
 
     ⚠️ 这个模型**只进不出**：任何接口都不得把 `password` 回传
-    （`CLAUDE.md` 第四条）。改密码时才填 `password`；留空表示**沿用原密码**。
+    （项目设计约束 第四条）。改密码时才填 `password`；留空表示**沿用原密码**。
     """
 
     username: str = Field(default="", description="蒲公英登录账号")
@@ -150,12 +150,12 @@ class AccountUpsert(BaseModel):
 
 
 def create_app() -> FastAPI:
-    mio_logging.setup_logging()
-    mio_logging.install_excepthooks()
+    pgy_logging.setup_logging()
+    pgy_logging.install_excepthooks()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        log.info("本地服务已启动 %s", mio_logging.environment_summary())
+        log.info("本地服务已启动 %s", pgy_logging.environment_summary())
         try:
             yield
         finally:
@@ -261,7 +261,7 @@ def create_app() -> FastAPI:
         （`probe_backend_identity`）与 MCP（`pgy_mcp/discovery.py` 的 IDENTITY_MARKERS）
         都按这两个词判断「端口上跑的到底是不是本程序的后端」。
 
-        用 `pgy` 而非参考项目的 `playwright`，是为了和可能同机共存的 Ling 客户端区分开。
+        用 `pgy` 而非泛泛的 `playwright`，是为了让同机其它浏览器自动化服务不会被误认。
         """
         return {"status": "ok", "service": "ready", "browser": "playwright", "product": "pgy"}
 
@@ -269,7 +269,7 @@ def create_app() -> FastAPI:
     def shutdown() -> dict:
         """客户端退出前调用：收拾自动化页 + 停 Playwright 驱动。
 
-        **只结束自动化接管**，不关浏览器、不关登录态（`CLAUDE.md` 第二条）。
+        **只结束自动化接管**，不关浏览器、不关登录态（项目设计约束 第二条）。
         必须在 `kill_backend` 之前调用 —— 否则驱动可能变成孤儿进程，
         留下的页签看起来像死锁/一直转圈。
         """
@@ -286,7 +286,7 @@ def create_app() -> FastAPI:
         """当前会话状态桩。
 
         M0 只返回「未连接」。真实实现要接会话状态机与浏览器登录态（M2/M3）。
-        形状刻意与 `docs/03` §6 及前端消费方对齐，后续填充而不改契约。
+        形状刻意与前端消费方对齐，后续填充而不改契约。
         """
         return {
             "account_id": "",
@@ -357,7 +357,7 @@ def create_app() -> FastAPI:
         """一级/二级行业枚举（前端下拉用；平台要的是 ID 不是名称）。
 
         `source` 如实标注这份数据是**这次真去平台问的**（`live`）还是
-        **上次存下来的快照**（`cache`）—— 别让用户以为是实时数据（`CLAUDE.md` 第九条）。
+        **上次存下来的快照**（`cache`）—— 别让用户以为是实时数据（项目设计约束 第九条）。
         没有会话又没有快照时返回 404，前端据此引导「先去账户页登录」。
         """
         from backend.services import selection_service
@@ -483,7 +483,7 @@ def create_app() -> FastAPI:
                                        ".spreadsheetml.sheet")
 
     # ---------- 账户 ----------
-    # 单账号。凭据只进 Windows 凭据管理器（`CLAUDE.md` 第四条）：
+    # 单账号。凭据只进 Windows 凭据管理器（项目设计约束 第四条）：
     # **只写不读** —— 这里没有任何接口会把密码回传，`AccountUpsert` 只进不出。
     # ⚠️ 这几个端点**有意不进 MCP 工具清单**：登录这一步不经过大模型。
 
@@ -569,7 +569,7 @@ def create_app() -> FastAPI:
 
     # ---------- 报价档位 ----------
     # 价格是商业敏感数据，但这是**本机回环 + 来源校验**的接口，只给本机设置页用；
-    # 不会进 MCP（`CLAUDE.md` 第四条：凭据类/敏感配置不经过大模型）。
+    # 不会进 MCP（项目设计约束 第四条：凭据类/敏感配置不经过大模型）。
 
     @app.get("/api/pricing")
     def get_pricing() -> dict:
@@ -622,7 +622,7 @@ def create_app() -> FastAPI:
         ⚠️ 查询参数叫 `q`，而 `read_log_file()` 的形参叫 `query` —— 这里显式对齐，
         免得两边名字一样、实际没传进去。
         """
-        return mio_logging.read_log_file(limit=limit, level=level, query=q)
+        return pgy_logging.read_log_file(limit=limit, level=level, query=q)
 
     @app.post("/api/logs/client")
     async def client_log(request: Request) -> dict:

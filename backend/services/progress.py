@@ -28,7 +28,7 @@ ERROR = "error"
 
 # 给界面直接显示的中文标签（别让前端再维护一份映射）
 # ⚠️ 2026-11-23 起不再有「登录小红书」阶段：中位数改从蒲公英详情页取，
-# 整条采集链路只访问 `pgy.xiaohongshu.com`（见 `findings.md` F-60）。
+# 整条采集链路只访问 `pgy.xiaohongshu.com`（见 实测记录）。
 STAGE_LABELS = {
     IDLE: "空闲",
     LOGIN: "登录平台",

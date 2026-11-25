@@ -1,7 +1,7 @@
 """Mio 本地凭据安全存储：Windows Credential Manager（ctypes，无第三方依赖）。
 
 产品规则（对应 P0-1 第 2.2 / 2.4 节）：
-- 账号元数据进 SQLite（mio_account），密码/敏感凭据进本模块（Windows Credential Manager）。
+- 账号元数据进 SQLite（local_accounts），密码/敏感凭据进本模块（Windows Credential Manager）。
 - 业务层只允许 AccountService → CredentialStore 这条调用链，不得直接调用本模块底层
   的 CredWriteW / CredReadW 等系统接口。
 - 密码绝不以明文写入 SQLite、JSON 文件、日志或源码。

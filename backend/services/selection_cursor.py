@@ -21,7 +21,7 @@ import json
 import logging
 from pathlib import Path
 
-from backend.core.mio_core import ROOT, _atomic_write
+from backend.core.pgy_core import ROOT, _atomic_write
 
 log = logging.getLogger("pgy.selection_cursor")
 
@@ -99,4 +99,4 @@ def save(first_industry: str, second_industry: str, next_pages: dict,
         log.warning("写游标失败（不影响本次结果）：%s", CURSOR_FILE, exc_info=True)
 
 # 「重新开始」不需要额外接口：`mode="fresh"` 从第 1 页取，取完就把游标写回下一页，
-# 等于顺手重置了。留一个 reset() 只会变成第二套做法（CLAUDE.md 第五条）。
+# 等于顺手重置了。留一个 reset() 只会变成第二套做法（项目设计约束 第五条）。

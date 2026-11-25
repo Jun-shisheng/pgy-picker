@@ -1,11 +1,11 @@
-"""把蒲公英/小红书原始 JSON 映射成客户交付表的行。
+"""把蒲公英/小红书原始 JSON 映射成交付表的行。
 
 职责单一：**只做映射，不碰网络、不碰浏览器**。这样它可以：
 - 离线对历史快照重跑（平台改版时不用重采）；
 - 被单测直接喂样例 JSON 覆盖。
 
-2026-11-10 起交付表以 `资料和说明/最新模板/ai需求.xlsx` 为准（10 列，2026-11-16 加「小红书号」）。
-「量级 / 序号 / 曝光中位数 / 互动中位数」已按用户要求移出交付表；
+交付表固定 10 列（2026-11-10 定稿，2026-11-16 加「小红书号」）。
+「量级 / 序号 / 曝光中位数 / 互动中位数」已移出交付表；
 「赞藏」与「主页近10篇点赞中位数」由采集层补进原始字典后再映射。
 """
 
@@ -102,8 +102,8 @@ def _content_type(content_tags: Any, feature_tags: Any, trade_type: Any) -> str 
     - 去重、保持原顺序、空格分隔；
     - 取不到任何标签时，才回落到 `tradeType` 第一个词。
 
-    实测 AvaFoo：`影视综资讯 时尚 ootd 测评`（4 个）；
-    整理师Anne：`家居家装 时尚 极简主义 职场生活 隔离防晒 vlog 教程`（不含 3-6岁/妈妈/整理师/夫妻）。
+    示例一：`影视综资讯 时尚 ootd 测评`（4 个）；
+    示例二：`家居家装 时尚 极简主义 职场生活 隔离防晒 vlog 教程`。
     """
     names: list[str] = []
     if isinstance(content_tags, list):
@@ -195,7 +195,7 @@ def sort_rows(rows: list[dict]) -> list[dict]:
         4. **粉丝数**高的在前
 
     排序键放在行的内部标记里（`__flags__`）。交付表里已经没有「量级 / 序号」列，
-    但顺序仍按档位走 —— 客户看名单时还是按报价档位从高到低。
+    但顺序仍按档位走 —— 看名单时还是按报价档位从高到低。
     """
     def key(row: dict):
         flags = row.get(FLAGS_KEY) or {}
@@ -226,7 +226,7 @@ def region_matches(value: Any, regions: str | list[str] | tuple[str, ...] | None
     - `"中国"`：等价于不限（中国范围内全收）。
 
     这里再本地核对一次：万一平台哪天把该参数静默忽略（粉丝区间就出过这种事，
-    findings F-40），交出去的名单也不会混进外地人。
+    findings），交出去的名单也不会混进外地人。
     """
     if isinstance(regions, (list, tuple, set)):
         wanted_paths = [str(item).strip() for item in regions if str(item).strip()]

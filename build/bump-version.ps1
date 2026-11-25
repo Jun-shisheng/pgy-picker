@@ -8,7 +8,7 @@
 # ⚠️⚠️ **本脚本 2026-10-12 出过一次严重事故，改动前务必读这段** ⚠️⚠️
 #
 # 事故：第一版用 `Get-Content -Raw` 读文件。Windows PowerShell 5.1 的 `Get-Content`
-# **默认按系统 ANSI 代码页（中文机器上是 936/GBK）解码**，而这些文件是 UTF-8。
+# **默认按系统 ANSI 代码页（中文机器上是 936/GBK）解码**，而这些文件是 UT。
 # 于是：读出即乱码 → `WriteAllText(UTF8)` 写回 → **乱码被固化，四个文件的中文全毁**。
 # 更糟的是 GBK 对某些字节对无对应，解码时替换成 `?`，**信息有损、无法机械还原**。
 #
@@ -18,7 +18,7 @@
 #   2. 脚本改完文件后**必须复核关键中文还在**（见文件末尾的断言），
 #      不然"命令成功了"会骗过你 —— 那次就是四个文件全毁却一路打印 [OK]。
 #
-# 另：本文件自身含中文，**必须以 UTF-8 with BOM 保存**，否则 PS 5.1 按 GBK 读会解析报错。
+# 另：本文件自身含中文，**必须以 UT with BOM 保存**，否则 PS 5.1 按 GBK 读会解析报错。
 
 param(
   [ValidateSet("patch", "minor", "major")][string]$Bump,
@@ -55,7 +55,7 @@ function Get-ChineseToken([string]$note) {
 }
 
 function Read-Utf8([string]$relative) {
-  # 唯一正确的读法：显式 UTF-8。用 Get-Content 会把中文读坏（见文件头的事故说明）。
+  # 唯一正确的读法：显式 UT。用 Get-Content 会把中文读坏（见文件头的事故说明）。
   return [System.IO.File]::ReadAllText((Join-Path $root $relative), [System.Text.Encoding]::UTF8)
 }
 
